@@ -73,7 +73,7 @@ class SalesAgent:
  def __init__(self):
   self.memory=Memory();self.brain=AutoBrilloBrain();self.catalog=Catalog();self.site_builder=SiteBuilder();self.dry_run=os.getenv('AUTOBRILLO_DRY_RUN','true').lower()!='false';self.kill=os.getenv('AUTOBRILLO_KILL_SWITCH','false').lower()=='true'
   self.connectors=[Connector('Meta/Facebook','social',('META_ACCESS_TOKEN','META_PAGE_ID')),Connector('Mercado Libre','products',('ML_ACCESS_TOKEN','ML_USER_ID')),Connector('Analytics','analytics',('ANALYTICS_API_KEY',))]
- def learn(self,text,label):self.brain.add_examples([{'text':text,'label':label}]);self.memory.remember('learning',{'text':text,'label':label},'stored')
+ def learn(self,text,label):return self.brain.add_examples([{'text':text,'label':label}]) or self.memory.remember('learning',{'text':text,'label':label},'stored')
  def record_result(self,action,result,value=0,product=None):self.memory.remember('sales_result',{'action':action,'value':value,'product':product},result);self.memory.metric(product,action,value)
  def create_page(self,name):
   p=next((x for x in self.catalog.products if x.name==name),None)
@@ -83,9 +83,20 @@ class SalesAgent:
   for p in self.catalog.products:
    m=self.memory.metrics(p.name);clicks=m.get('click',{}).get('count',0);sales=m.get('sale',{}).get('count',0);rev=m.get('commission',{}).get('value',0);conv=sales/clicks if clicks else 0;profit=min(p.estimated_profit/max(p.price,1),1);p.score=round(.45*profit+.35*min(conv,1)+.20*min(rev/1000,1),6)
   self.catalog.save();self.memory.remember('scoring',{'products':len(self.catalog.products)},'completed')
+ def think(self):
+  candidates=[]
+  for p in self.catalog.products:
+   m=self.memory.metrics(p.name);clicks=m.get('click',{}).get('count',0);sales=m.get('sale',{}).get('count',0)
+   candidates.append({'name':p.name,'price':p.price,'estimated_profit':p.estimated_profit,'commission_value':p.commission_value,'clicks':clicks,'sales':sales,'trend':min(1.0,max(0.0,p.score)),'confidence':0.5,'risk':0.2})
+  decision=self.brain.think({'candidates':candidates});self.memory.remember('decision',decision,'computed');return decision
  def plan(self,limit=5):
-  self.score_products();tasks=[]
-  for p in self.catalog.best(limit):tasks.append({'action':'create_page','product':p.name,'priority':p.score})
+  self.score_products();decision=self.think();tasks=[]
+  ordered=[x.get('name') for x in decision.get('alternatives',[]) if x.get('name')]
+  for name in ordered[:limit]:
+   item=next((p for p in self.catalog.products if p.name==name and p.active),None)
+   if item:
+    selected=next((x for x in decision['alternatives'] if x.get('name')==name),{})
+    tasks.append({'action':'create_page','product':name,'priority':selected.get('score',item.score),'decision':decision.get('decision','wait')})
   if self.memory.allowed('marketing'):
    for p in self.catalog.best(limit):tasks.append({'action':'prepare_marketing','product':p.name,'priority':p.score*.9})
   return sorted(tasks,key=lambda x:x['priority'],reverse=True)
@@ -104,11 +115,10 @@ class SalesAgent:
    except Exception as e:results.append({'task':t,'error':str(e)})
   self.memory.remember('cycle',{'tasks':len(tasks),'dry_run':self.dry_run},'completed');return {'dry_run':self.dry_run,'tasks':results}
  def status(self):
-  return {'version':'v5','products':len(self.catalog.products),'events':len(self.memory.recent(100000)),'brain_ready':self.brain.ready,'permissions':{k:self.memory.allowed(k) for k in PERMISSIONS},'dry_run':self.dry_run,'kill_switch':self.kill,'connectors':[c.status() for c in self.connectors],'planned_tasks':len(self.plan())}
+  return {'version':'v5.2','products':len(self.catalog.products),'events':len(self.memory.recent(100000)),'brain_ready':self.brain.ready,'brain_stats':self.brain.stats(),'permissions':{k:self.memory.allowed(k) for k in PERMISSIONS},'dry_run':self.dry_run,'kill_switch':self.kill,'connectors':[c.status() for c in self.connectors],'planned_tasks':len(self.plan())}
 
 def main():
- p=argparse.ArgumentParser(description='AutoBrillo AI v5')
- s=p.add_subparsers(dest='cmd');s.add_parser('status');s.add_parser('plan');s.add_parser('cycle');s.add_parser('connectors')
+ p=argparse.ArgumentParser(description='AutoBrillo AI v5.2');s=p.add_subparsers(dest='cmd');s.add_parser('status');s.add_parser('plan');s.add_parser('cycle');s.add_parser('connectors');s.add_parser('think')
  l=s.add_parser('learn');l.add_argument('text');l.add_argument('label')
  a=s.add_parser('add-product');a.add_argument('name');a.add_argument('price',type=float);a.add_argument('--cost',type=float,default=0);a.add_argument('--commission',type=float,default=0);a.add_argument('--url',default='')
  perm=s.add_parser('permission');perm.add_argument('name',choices=PERMISSIONS);perm.add_argument('enabled',type=int,choices=(0,1))
@@ -116,6 +126,7 @@ def main():
  if args.cmd=='learn':agent.learn(args.text,args.label);print('Aprendizaje guardado')
  elif args.cmd=='add-product':agent.catalog.add(Product(args.name,args.price,args.cost,args.commission,args.url));print('Producto agregado')
  elif args.cmd=='plan':print(json.dumps(agent.plan(),ensure_ascii=False,indent=2))
+ elif args.cmd=='think':print(json.dumps(agent.think(),ensure_ascii=False,indent=2))
  elif args.cmd=='cycle':print(json.dumps(agent.run_cycle(),ensure_ascii=False,indent=2))
  elif args.cmd=='connectors':print(json.dumps([c.status() for c in agent.connectors],ensure_ascii=False,indent=2))
  elif args.cmd=='permission':agent.memory.set_permission(args.name,bool(args.enabled));print('Permiso actualizado')
