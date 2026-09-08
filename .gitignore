@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+.env
+.env.*
+*.log
+model_data.json
+ml_tokens.enc
+ml_oauth_state.json
+.venv/
+venv/
