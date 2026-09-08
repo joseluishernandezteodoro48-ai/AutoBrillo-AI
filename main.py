@@ -110,3 +110,11 @@ def oauth_callback(code: str | None = None, state: str | None = None):
     except Exception as exc:
         raise HTTPException(400, f'No se pudo completar OAuth: {exc}')
     return 'AutoBrillo AI: Mercado Libre conectado correctamente. Ya puedes cerrar esta ventana.'
+
+
+@app.post('/webhooks/mercadolibre', status_code=200)
+async def mercadolibre_webhook(payload: dict):
+    """Recibe callbacks de Mercado Libre sin exponer tokens ni datos sensibles."""
+    # Mercado Libre requiere una respuesta rápida; el procesamiento real se hará
+    # después mediante la API usando el token cifrado, no desde el callback.
+    return {'ok': True}
