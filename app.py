@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from model import AutoBrilloBrain
 from mercadolibre_oauth import MercadoLibreOAuth
 
-app = FastAPI(title="AutoBrillo AI", version="3.0.0")
+app = FastAPI(title="AutoBrillo AI", version="3.1.0")
 brain = AutoBrilloBrain()
 ml = MercadoLibreOAuth()
 
@@ -42,7 +42,7 @@ class ThinkRequest(BaseModel):
 
 @app.get("/")
 def root():
-    return {"name": "AutoBrillo AI", "version": "3.0.0", "status": "online"}
+    return {"name": "AutoBrillo AI", "version": "3.1.0", "status": "online"}
 
 
 @app.get("/health")
@@ -77,7 +77,10 @@ def learn_outcome(payload: OutcomeRequest):
 
 @app.get("/mercadolibre/status")
 def mercado_status():
-    return ml.status()
+    try:
+        return ml.status()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/mercadolibre/authorize")
@@ -91,7 +94,9 @@ def mercado_authorize():
 @app.get("/mercadolibre/callback")
 def mercado_callback(code: str, state: str):
     try:
-        return ml.exchange(code, state)
+        ml.exchange(code, state)
+        # Never return OAuth tokens to the browser/client.
+        return {"authorized": True, "message": "Mercado Libre autorizado correctamente"}
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
