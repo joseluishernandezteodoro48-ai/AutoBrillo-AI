@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import secrets
 import time
 from urllib.error import HTTPError
@@ -48,6 +49,19 @@ class MercadoLibreOAuth:
         }
         return self.AUTH_URL + "?" + urlencode(params)
 
+    @staticmethod
+    def _safe_error_text(value: str) -> str:
+        """Keep diagnostics useful without ever echoing OAuth credentials."""
+        text = value[:1000]
+        patterns = [
+            r"(?i)(client[_-]?secret|secret[_-]?key|access[_-]?token|refresh[_-]?token|code[_-]?verifier|authorization[_-]?code)\s*[:=]\s*[^,;\s}]+",
+            r"(?i)APP_USR-[A-Za-z0-9._-]+",
+            r"(?i)TG-[A-Za-z0-9._-]+",
+        ]
+        for pattern in patterns:
+            text = re.sub(pattern, lambda m: m.group(0).split(":", 1)[0].split("=", 1)[0] + "=[redacted]", text)
+        return text.strip()
+
     def exchange(self, code, state):
         if not self.configured():
             raise RuntimeError("OAuth no está configurado.")
@@ -72,6 +86,7 @@ class MercadoLibreOAuth:
             headers={
                 "Accept": "application/json",
                 "Content-Type": "application/x-www-form-urlencoded",
+                "User-Agent": "AutoBrillo-AI/5.1",
             },
         )
 
@@ -79,18 +94,22 @@ class MercadoLibreOAuth:
             with urlopen(req, timeout=20) as response:
                 token = json.loads(response.read().decode())
         except HTTPError as exc:
-            # Mercado Libre puede devolver detalles útiles (por ejemplo,
-            # forbidden/invalid_client/invalid_grant). Los mostramos sin
-            # revelar client_secret, code, verifier ni tokens.
             try:
                 raw = exc.read().decode("utf-8", errors="replace")
-                details = json.loads(raw)
+                try:
+                    details = json.loads(raw)
+                except json.JSONDecodeError:
+                    details = {}
+                error = details.get("error") or details.get("code")
+                message = details.get("message") or details.get("error_description")
+                if error or message:
+                    detail = f"{error or 'http_error'} — {message or 'sin mensaje'}"
+                else:
+                    detail = self._safe_error_text(raw) or "Sin detalle adicional."
             except Exception:
-                details = {}
-            error = details.get("error") or details.get("code") or "http_error"
-            message = details.get("message") or details.get("error_description") or "Sin detalle adicional."
+                detail = "Sin detalle adicional."
             raise RuntimeError(
-                f"Mercado Libre rechazó el intercambio (HTTP {exc.code}): {error} — {message}"
+                f"Mercado Libre rechazó el intercambio (HTTP {exc.code}): {detail}"
             ) from None
 
         with open(self.token_file, "wb") as f:
