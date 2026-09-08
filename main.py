@@ -1,6 +1,6 @@
 import os
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from autobrillo import Product, SalesAgent
@@ -98,7 +98,9 @@ def set_permission(request: PermissionRequest):
 def start_oauth():
     if not oauth.configured():
         raise HTTPException(503, 'Mercado Libre OAuth no está configurado.')
-    return {'authorization_url': oauth.start()}
+    # Redirige directamente a Mercado Libre para que el usuario no tenga que
+    # copiar manualmente la URL de autorización.
+    return RedirectResponse(url=oauth.start(), status_code=302)
 
 
 @app.get('/oauth/mercadolibre/callback', response_class=PlainTextResponse)
