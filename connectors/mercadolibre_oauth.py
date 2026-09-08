@@ -4,9 +4,12 @@ import json
 import os
 import secrets
 import time
+from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+
 from cryptography.fernet import Fernet
+
 
 class MercadoLibreOAuth:
     AUTH_URL = "https://auth.mercadolibre.com.mx/authorization"
@@ -54,6 +57,7 @@ class MercadoLibreOAuth:
             raise RuntimeError("State OAuth inválido.")
         if time.time() - float(saved.get("created_at", 0)) > 600:
             raise RuntimeError("State OAuth expirado.")
+
         data = urlencode({
             "grant_type": "authorization_code",
             "client_id": self.client_id,
@@ -62,9 +66,33 @@ class MercadoLibreOAuth:
             "redirect_uri": self.redirect_uri,
             "code_verifier": saved["verifier"],
         }).encode()
-        req = Request(self.TOKEN_URL, data=data, headers={"Content-Type": "application/x-www-form-urlencoded"})
-        with urlopen(req, timeout=20) as response:
-            token = json.loads(response.read().decode())
+        req = Request(
+            self.TOKEN_URL,
+            data=data,
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+        )
+
+        try:
+            with urlopen(req, timeout=20) as response:
+                token = json.loads(response.read().decode())
+        except HTTPError as exc:
+            # Mercado Libre puede devolver detalles útiles (por ejemplo,
+            # forbidden/invalid_client/invalid_grant). Los mostramos sin
+            # revelar client_secret, code, verifier ni tokens.
+            try:
+                raw = exc.read().decode("utf-8", errors="replace")
+                details = json.loads(raw)
+            except Exception:
+                details = {}
+            error = details.get("error") or details.get("code") or "http_error"
+            message = details.get("message") or details.get("error_description") or "Sin detalle adicional."
+            raise RuntimeError(
+                f"Mercado Libre rechazó el intercambio (HTTP {exc.code}): {error} — {message}"
+            ) from None
+
         with open(self.token_file, "wb") as f:
             f.write(self._fernet().encrypt(json.dumps(token).encode()))
         try:
