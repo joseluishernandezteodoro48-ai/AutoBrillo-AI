@@ -73,7 +73,8 @@ class SalesAgent:
  def __init__(self):
   self.memory=Memory();self.brain=AutoBrilloBrain();self.catalog=Catalog();self.site_builder=SiteBuilder();self.dry_run=os.getenv('AUTOBRILLO_DRY_RUN','true').lower()!='false';self.kill=os.getenv('AUTOBRILLO_KILL_SWITCH','false').lower()=='true'
   self.connectors=[Connector('Meta/Facebook','social',('META_ACCESS_TOKEN','META_PAGE_ID')),Connector('Mercado Libre','products',('ML_ACCESS_TOKEN','ML_USER_ID')),Connector('Analytics','analytics',('ANALYTICS_API_KEY',))]
- def learn(self,text,label):return self.brain.add_examples([{'text':text,'label':label}]) or self.memory.remember('learning',{'text':text,'label':label},'stored')
+ def learn(self,text,label):
+  result=self.brain.add_examples([{'text':text,'label':label}]);self.memory.remember('learning',{'text':text,'label':label},'stored');return result
  def record_result(self,action,result,value=0,product=None):self.memory.remember('sales_result',{'action':action,'value':value,'product':product},result);self.memory.metric(product,action,value)
  def create_page(self,name):
   p=next((x for x in self.catalog.products if x.name==name),None)
