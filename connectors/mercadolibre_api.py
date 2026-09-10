@@ -9,13 +9,7 @@ from connectors.mercadolibre_oauth import MercadoLibreOAuth
 
 
 class MercadoLibreAPI:
-    """Authenticated Mercado Libre client with public catalog search support.
-
-    Product discovery (/sites/{site}/search) is kept independent from the
-    seller OAuth token because Brillo is searching marketplace listings, not
-    the connected seller's own inventory. Authenticated endpoints continue to
-    use the OAuth access token.
-    """
+    """Mercado Libre client using the connected seller OAuth token."""
 
     BASE_URL = "https://api.mercadolibre.com"
 
@@ -41,31 +35,8 @@ class MercadoLibreAPI:
         return data
 
     def request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
-        """Call an authenticated Mercado Libre endpoint."""
         headers = dict(kwargs.pop("headers", {}) or {})
         headers["Authorization"] = f"Bearer {self._token()}"
-        headers.setdefault("Accept", "application/json")
-        response = requests.request(
-            method,
-            f"{self.BASE_URL}{path}",
-            headers=headers,
-            timeout=self.timeout,
-            **kwargs,
-        )
-        data = self._decode_response(response)
-        if not response.ok:
-            detail = data.get("message") or data.get("error_description") or data.get("error")
-            raise RuntimeError(f"Mercado Libre API {response.status_code}: {detail or 'solicitud rechazada'}")
-        return data
-
-    def public_request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
-        """Call a marketplace discovery endpoint without seller OAuth.
-
-        This avoids coupling public product discovery to the permissions of the
-        connected seller account. The OAuth token remains required for seller
-        operations such as /users/me, publishing and orders.
-        """
-        headers = dict(kwargs.pop("headers", {}) or {})
         headers.setdefault("Accept", "application/json")
         response = requests.request(
             method,
@@ -84,12 +55,17 @@ class MercadoLibreAPI:
         return self.request("GET", "/users/me")
 
     def search(self, query: str, limit: int = 5) -> dict[str, Any]:
-        """Search marketplace listings for Brillo's product discovery."""
+        """Search marketplace listings using the authorized application token.
+
+        Mercado Libre's current documentation requires Authorization for the
+        /sites/{site_id}/search resource. This is intentionally authenticated;
+        public_request was removed because it can return HTTP 403.
+        """
         query = query.strip()
         if not query:
             raise ValueError("La búsqueda no puede estar vacía.")
         limit = max(1, min(int(limit), 50))
-        return self.public_request(
+        return self.request(
             "GET",
             f"/sites/{self.site}/search",
             params={"q": query, "limit": limit},
