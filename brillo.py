@@ -1,9 +1,4 @@
-"""Brillo: interfaz de órdenes para AutoBrillo AI.
-
-Brillo es la cara del sistema: recibe una orden en lenguaje natural y la
-convierte en una intención estructurada que Tygo/SalesAgent puede planificar.
-No ejecuta pagos, compras ni publicaciones irreversibles por sí mismo.
-"""
+"""Brillo: interfaz de órdenes y orquestación de AutoBrillo AI."""
 from __future__ import annotations
 
 import argparse
@@ -11,11 +6,12 @@ import json
 import re
 from typing import Any, Dict
 
-from autobrillo import SalesAgent
+from autobrillo import Product, SalesAgent
+from product_sources import ProductSourceError, search_products
 
 
 class Brillo:
-    """Capa de entrada y orquestación segura sobre SalesAgent."""
+    """La cara del sistema: entiende la orden y coordina a Tygo/SalesAgent."""
 
     PRODUCT_COUNT = re.compile(r"\b(\d+)\b")
 
@@ -27,69 +23,60 @@ class Brillo:
         normalized = text.casefold()
         count_match = self.PRODUCT_COUNT.search(normalized)
         count = int(count_match.group(1)) if count_match else 5
-
         wants_sell = any(x in normalized for x in ("vender", "venta", "vende", "sell"))
         wants_find = any(x in normalized for x in ("consigue", "buscar", "busca", "encontrar", "productos"))
         wants_publish = any(x in normalized for x in ("publica", "publicar", "anuncia", "publicación"))
+        intent = "source_and_sell" if wants_find and wants_sell else "sell" if wants_sell else "source" if wants_find else "general"
+        return {"raw": text, "intent": intent, "product_count": max(1, min(count, 50)), "publish_requested": wants_publish}
 
-        if wants_find and wants_sell:
-            intent = "source_and_sell"
-        elif wants_sell:
-            intent = "sell"
-        elif wants_find:
-            intent = "source"
-        else:
-            intent = "general"
-
-        return {
-            "raw": text,
-            "intent": intent,
-            "product_count": max(1, min(count, 50)),
-            "publish_requested": wants_publish,
-        }
+    def source(self, query: str, count: int = 5) -> Dict[str, Any]:
+        """Busca candidatos reales y los incorpora al catálogo para que Tygo los evalúe."""
+        candidates = search_products(query, count)
+        added, skipped = [], []
+        for item in candidates:
+            try:
+                self.agent.catalog.add(Product(
+                    name=item["name"], price=float(item["price"]), cost=float(item.get("cost", 0)),
+                    commission=float(item.get("commission", 0)), url=item.get("url", ""),
+                    active=bool(item.get("active", True)), score=float(item.get("score", 0)),
+                ))
+                added.append(item["name"])
+            except ValueError:
+                skipped.append(item["name"])
+        self.agent.memory.remember("product_source", {"query": query, "found": len(candidates), "added": len(added)}, "completed")
+        return {"found": len(candidates), "added": added, "skipped": skipped, "source": "mercadolibre"}
 
     def respond(self, command: str) -> Dict[str, Any]:
         intent = self.understand(command)
-
-        # Tygo recibe candidatos del catálogo actual. La búsqueda externa se
-        # deja como etapa de conector, nunca se simula como si hubiera ocurrido.
-        if intent["intent"] in ("source_and_sell", "sell"):
+        if intent["intent"] in ("source_and_sell", "source"):
+            # La consulta de productos se obtiene del texto restante; si no hay una
+            # categoría clara, se usa una consulta genérica y se deja la selección a Tygo.
+            query = re.sub(r"\b\d+\b", "", intent["raw"], count=1).strip()
+            query = re.sub(r"\b(consigue|busca|buscar|encontrar|productos|y|vende|vender|venta)\b", " ", query, flags=re.I).strip() or "productos populares"
+            try:
+                source_result = self.source(query, intent["product_count"])
+            except ProductSourceError as exc:
+                return {"ok": False, "assistant": "Brillo", "brain": "Tygo/SalesAgent", "intent": intent, "error": str(exc)}
             plan = self.agent.plan(intent["product_count"])
-            return {
-                "ok": True,
-                "assistant": "Brillo",
-                "brain": "Tygo/SalesAgent",
-                "intent": intent,
-                "status": "planned",
-                "plan": plan,
-                "next": "conectar fuente de productos y canal de venta oficial",
-                "financial_actions": "requieren autorización/conector oficial",
-            }
+            return {"ok": True, "assistant": "Brillo", "brain": "Tygo/SalesAgent", "intent": intent,
+                    "source": source_result, "status": "planned", "plan": plan,
+                    "next": "evaluar candidatos y preparar venta; publicar/cobrar requiere autorización y conector oficial"}
 
-        if intent["intent"] == "source":
-            return {
-                "ok": True,
-                "assistant": "Brillo",
-                "intent": intent,
-                "status": "ready",
-                "next": "ejecutar búsqueda mediante un conector de productos autorizado",
-            }
+        if intent["intent"] == "sell":
+            plan = self.agent.plan(intent["product_count"])
+            return {"ok": True, "assistant": "Brillo", "brain": "Tygo/SalesAgent", "intent": intent,
+                    "status": "planned", "plan": plan,
+                    "next": "conectar canal de venta oficial", "financial_actions": "requieren autorización/conector oficial"}
 
-        return {
-            "ok": True,
-            "assistant": "Brillo",
-            "intent": intent,
-            "status": "understood",
-            "available": ["think", "plan", "learn", "source", "sell"],
-        }
+        return {"ok": True, "assistant": "Brillo", "intent": intent,
+                "status": "understood", "available": ["think", "plan", "learn", "source", "sell"]}
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Brillo - interfaz de AutoBrillo AI")
     parser.add_argument("command", nargs="+", help="Orden para Brillo")
     args = parser.parse_args()
-    result = Brillo().respond(" ".join(args.command))
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    print(json.dumps(Brillo().respond(" ".join(args.command)), ensure_ascii=False, indent=2))
 
 
 if __name__ == "__main__":
