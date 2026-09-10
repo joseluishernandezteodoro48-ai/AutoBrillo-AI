@@ -38,14 +38,10 @@ class MercadoLibreOAuth:
         return all((self.client_id, self.client_secret, self.redirect_uri, self.token_key))
 
     def database_configured(self):
-        # Render can temporarily expose an unresolved Blueprint placeholder.
-        # Treat that as unavailable instead of letting psycopg raise a 500.
         return bool(self.database_url and "${" not in self.database_url and psycopg)
 
     def _db_url(self):
-        if not self.database_url:
-            return ""
-        if "${" in self.database_url:
+        if not self.database_url or "${" in self.database_url:
             return ""
         if "sslmode=" in self.database_url.lower():
             return self.database_url
@@ -96,8 +92,9 @@ class MercadoLibreOAuth:
                 return
             except Exception:
                 pass
-        with open(self.token_file, "wb") as f:
-            f.write(encrypted)
+        if not self._db_enabled():
+            with open(self.token_file, "wb") as f:
+                f.write(encrypted)
 
     def _save_state(self, state_data):
         encrypted = self._fernet().encrypt(json.dumps(state_data).encode())
@@ -150,10 +147,11 @@ class MercadoLibreOAuth:
                     conn.commit()
             except Exception:
                 pass
-        try:
-            os.remove(self.state_file)
-        except OSError:
-            pass
+        if not self._db_enabled():
+            try:
+                os.remove(self.state_file)
+            except OSError:
+                pass
 
     def start(self):
         if not self.configured():
@@ -250,7 +248,13 @@ class MercadoLibreOAuth:
                     row = conn.execute("SELECT token_encrypted FROM autobrillo_oauth_tokens WHERE token_key = %s", (self.TOKEN_DB_KEY,)).fetchone()
                 if row:
                     return json.loads(self._fernet().decrypt(bytes(row[0])).decode())
-            except Exception:
-                pass
-        with open(self.token_file, "rb") as f:
-            return json.loads(self._fernet().decrypt(f.read()).decode())
+                raise RuntimeError("Mercado Libre no está conectado. Pulsa 'Conectar Mercado Libre' para autorizarlo.")
+            except RuntimeError:
+                raise
+            except Exception as exc:
+                raise RuntimeError("No se pudo acceder al almacenamiento seguro de Mercado Libre.") from exc
+        try:
+            with open(self.token_file, "rb") as f:
+                return json.loads(self._fernet().decrypt(f.read()).decode())
+        except FileNotFoundError:
+            raise RuntimeError("Mercado Libre no está conectado. Pulsa 'Conectar Mercado Libre' para autorizarlo.") from None
