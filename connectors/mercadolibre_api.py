@@ -9,10 +9,12 @@ from connectors.mercadolibre_oauth import MercadoLibreOAuth
 
 
 class MercadoLibreAPI:
-    """Small authenticated client for Mercado Libre Mexico APIs.
+    """Authenticated Mercado Libre client with public catalog search support.
 
-    Tokens are read through the existing OAuth connector; secrets are never
-    returned by this class.
+    Product discovery (/sites/{site}/search) is kept independent from the
+    seller OAuth token because Brillo is searching marketplace listings, not
+    the connected seller's own inventory. Authenticated endpoints continue to
+    use the OAuth access token.
     """
 
     BASE_URL = "https://api.mercadolibre.com"
@@ -20,6 +22,7 @@ class MercadoLibreAPI:
     def __init__(self, oauth: MercadoLibreOAuth | None = None):
         self.oauth = oauth or MercadoLibreOAuth()
         self.timeout = float(os.getenv("ML_API_TIMEOUT", "20"))
+        self.site = os.getenv("ML_SITE", "MLM").strip().upper() or "MLM"
 
     def _token(self) -> str:
         token = self.oauth.load_token()
@@ -27,7 +30,18 @@ class MercadoLibreAPI:
             raise RuntimeError("Mercado Libre no está autorizado todavía.")
         return str(token["access_token"])
 
+    @staticmethod
+    def _decode_response(response: requests.Response) -> dict[str, Any]:
+        try:
+            data = response.json()
+        except ValueError:
+            data = {"text": response.text[:1000]}
+        if not isinstance(data, dict):
+            return {"data": data}
+        return data
+
     def request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        """Call an authenticated Mercado Libre endpoint."""
         headers = dict(kwargs.pop("headers", {}) or {})
         headers["Authorization"] = f"Bearer {self._token()}"
         headers.setdefault("Accept", "application/json")
@@ -38,24 +52,48 @@ class MercadoLibreAPI:
             timeout=self.timeout,
             **kwargs,
         )
-        try:
-            data = response.json()
-        except ValueError:
-            data = {"text": response.text[:1000]}
+        data = self._decode_response(response)
         if not response.ok:
-            detail = data.get("message") if isinstance(data, dict) else None
+            detail = data.get("message") or data.get("error_description") or data.get("error")
             raise RuntimeError(f"Mercado Libre API {response.status_code}: {detail or 'solicitud rechazada'}")
-        return data if isinstance(data, dict) else {"data": data}
+        return data
+
+    def public_request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+        """Call a marketplace discovery endpoint without seller OAuth.
+
+        This avoids coupling public product discovery to the permissions of the
+        connected seller account. The OAuth token remains required for seller
+        operations such as /users/me, publishing and orders.
+        """
+        headers = dict(kwargs.pop("headers", {}) or {})
+        headers.setdefault("Accept", "application/json")
+        response = requests.request(
+            method,
+            f"{self.BASE_URL}{path}",
+            headers=headers,
+            timeout=self.timeout,
+            **kwargs,
+        )
+        data = self._decode_response(response)
+        if not response.ok:
+            detail = data.get("message") or data.get("error_description") or data.get("error")
+            raise RuntimeError(f"Mercado Libre API {response.status_code}: {detail or 'solicitud rechazada'}")
+        return data
 
     def me(self) -> dict[str, Any]:
         return self.request("GET", "/users/me")
 
     def search(self, query: str, limit: int = 5) -> dict[str, Any]:
+        """Search marketplace listings for Brillo's product discovery."""
         query = query.strip()
         if not query:
             raise ValueError("La búsqueda no puede estar vacía.")
         limit = max(1, min(int(limit), 50))
-        return self.request("GET", "/sites/MLM/search", params={"q": query, "limit": limit})
+        return self.public_request(
+            "GET",
+            f"/sites/{self.site}/search",
+            params={"q": query, "limit": limit},
+        )
 
     def item(self, item_id: str) -> dict[str, Any]:
         item_id = item_id.strip()
