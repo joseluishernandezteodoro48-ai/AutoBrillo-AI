@@ -1,7 +1,7 @@
-"""AutoBrillo AI v2 - motor de decisión algorítmica local.
+"""AutoBrillo AI v6 - motor de decisión algorítmica local.
 
-No contiene secretos ni realiza llamadas externas. Combina aprendizaje textual
-ligero con un motor de evaluación para comparar candidatos y elegir acciones.
+Combina aprendizaje textual ligero con evaluación económica y exploración.
+No contiene secretos ni realiza llamadas externas.
 """
 from __future__ import annotations
 import json, math, os, re, tempfile
@@ -49,7 +49,7 @@ class AutoBrilloBrain:
 
     def _save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload={"version":2,"examples":self.examples[-5000:],"outcomes":self.outcomes[-2000:]}
+        payload={"version":3,"examples":self.examples[-5000:],"outcomes":self.outcomes[-2000:]}
         fd,tmp=tempfile.mkstemp(prefix=self.path.name+".",dir=str(self.path.parent))
         try:
             with os.fdopen(fd,"w",encoding="utf-8") as f: json.dump(payload,f,ensure_ascii=False,indent=2)
@@ -86,25 +86,31 @@ class AutoBrilloBrain:
         return max(lo,min(hi,float(x)))
 
     def evaluate_candidate(self, candidate: Dict[str, Any]) -> Dict[str, Any]:
-        price=max(0.0,float(candidate.get("price",0) or 0)); profit=max(0.0,float(candidate.get("estimated_profit",candidate.get("commission",0)) or 0))
+        price=max(0.0,float(candidate.get("price",0) or 0))
+        cost_known=bool(candidate.get("cost_known",False))
+        profit=float(candidate.get("estimated_profit",0) or 0) if cost_known else 0.0
         clicks=max(0,float(candidate.get("clicks",0) or 0)); sales=max(0,float(candidate.get("sales",0) or 0))
         conversion=self._clamp(sales/clicks) if clicks else 0.0
         commission=max(0.0,float(candidate.get("commission_value",candidate.get("commission",0)) or 0))
-        margin=self._clamp(profit/max(price,1.0)); revenue=self._clamp(commission/1000.0)
-        trend=self._clamp(candidate.get("trend",0.5)); risk=self._clamp(candidate.get("risk",0.2)); confidence=self._clamp(candidate.get("confidence",0.5))
-        # Explotación + exploración: la falta de datos reduce el castigo por riesgo.
+        margin=self._clamp(profit/max(price,1.0)) if cost_known else 0.0
+        revenue=self._clamp(commission/1000.0)
+        trend=self._clamp(candidate.get("trend",0.5)); risk=self._clamp(candidate.get("risk",0.2))
+        confidence=self._clamp(candidate.get("confidence",0.5))
         data_conf=self._clamp(math.log1p(clicks)/math.log1p(100)) if clicks else 0.0
         exploration=0.12*(1-data_conf)
         score=(0.30*margin + 0.25*conversion + 0.18*revenue + 0.12*trend + 0.10*confidence + exploration - 0.15*risk)
+        if not cost_known: score*=0.35
         score=self._clamp(score)
         reasons=[]
-        if margin>=0.15: reasons.append("margen/beneficio atractivo")
+        if not cost_known: reasons.append("costo real del proveedor desconocido: investigar antes de vender")
+        elif margin>=0.15: reasons.append("margen neto atractivo")
+        elif profit<=0: reasons.append("margen neto no rentable")
         if conversion>=0.05: reasons.append("conversión favorable")
         if commission>0: reasons.append("comisión con valor económico")
         if trend>=0.65: reasons.append("tendencia positiva")
         if clicks<10: reasons.append("pocos datos: conviene probar antes de escalar")
         if risk>=0.6: reasons.append("riesgo elevado")
-        return {"name":candidate.get("name"),"score":round(score,6),"metrics":{"conversion":round(conversion,6),"margin":round(margin,6),"revenue":round(revenue,6),"trend":round(trend,6),"risk":round(risk,6),"confidence":round(confidence,6),"data_confidence":round(data_conf,6)},"reasons":reasons}
+        return {"name":candidate.get("name"),"score":round(score,6),"metrics":{"conversion":round(conversion,6),"margin":round(margin,6),"revenue":round(revenue,6),"trend":round(trend,6),"risk":round(risk,6),"confidence":round(confidence,6),"data_confidence":round(data_conf,6),"cost_known":cost_known},"reasons":reasons}
 
     def think(self, context: Dict[str, Any]) -> Dict[str, Any]:
         candidates=context.get("candidates",[]) or []
@@ -115,8 +121,12 @@ class AutoBrilloBrain:
         if best:
             gap=best["score"]-(evaluated[1]["score"] if len(evaluated)>1 else 0)
             confidence=self._clamp(0.45*best["score"]+0.35*self._clamp(gap*4)+0.20*best["metrics"]["data_confidence"])
-        decision="test" if best and best["metrics"]["data_confidence"]<0.25 else ("prioritize" if best else "wait")
-        return {"decision":decision,"confidence":round(confidence,6),"selected":best,"alternatives":evaluated[:5],"reasons":best["reasons"] if best else ["no hay candidatos suficientes"],"policy":"decision algorítmica auditable; no ejecución financiera automática"}
+        if not best: decision="wait"
+        elif not best["metrics"]["cost_known"]: decision="research_cost"
+        elif best["metrics"]["margin"]<=0: decision="wait"
+        elif best["metrics"]["data_confidence"]<0.25: decision="test"
+        else: decision="prioritize"
+        return {"decision":decision,"confidence":round(confidence,6),"selected":best,"alternatives":evaluated[:5],"reasons":best["reasons"] if best else ["no hay candidatos suficientes"],"policy":"decisión algorítmica auditable; no ejecución financiera automática"}
 
     def learn_outcome(self, context: Dict[str, Any], action: str, reward: float, details: Optional[Dict[str, Any]]=None)->Dict[str,Any]:
         record={"action":str(action),"reward":float(reward),"context":context,"details":details or {}}
@@ -124,4 +134,4 @@ class AutoBrilloBrain:
         return {"stored":True,"outcomes":len(self.outcomes)}
 
     def stats(self)->Dict[str,Any]:
-        return {"ready":self.ready,"examples":len(self.examples),"labels":dict(self.labels),"outcomes":len(self.outcomes),"model_path":str(self.path),"engine":"Naive Bayes + scoring + exploration/exploitation"}
+        return {"ready":self.ready,"examples":len(self.examples),"labels":dict(self.labels),"outcomes":len(self.outcomes),"model_path":str(self.path),"engine":"Naive Bayes + economía neta + scoring + exploración/explotación"}
