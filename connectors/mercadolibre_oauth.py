@@ -11,10 +11,16 @@ from urllib.request import Request, urlopen
 
 from cryptography.fernet import Fernet
 
+try:
+    import psycopg
+except ImportError:  # pragma: no cover - dependency is installed in production
+    psycopg = None
+
 
 class MercadoLibreOAuth:
     AUTH_URL = "https://auth.mercadolibre.com.mx/authorization"
     TOKEN_URL = "https://api.mercadolibre.com/oauth/token"
+    TOKEN_DB_KEY = "mercadolibre_primary"
 
     def __init__(self):
         self.client_id = os.getenv("ML_CLIENT_ID", "")
@@ -23,6 +29,7 @@ class MercadoLibreOAuth:
         self.state_file = os.getenv("ML_OAUTH_STATE_FILE", "ml_oauth_state.json")
         self.token_file = os.getenv("ML_TOKEN_FILE", "ml_tokens.enc")
         self.token_key = os.getenv("AUTOBRILLO_TOKEN_KEY", "")
+        self.database_url = os.getenv("DATABASE_URL", "")
         self.site = os.getenv("ML_SITE", "MLM")
 
     def configured(self):
@@ -30,6 +37,45 @@ class MercadoLibreOAuth:
 
     def _fernet(self):
         return Fernet(self.token_key.encode())
+
+    def _db_enabled(self):
+        return bool(self.database_url and psycopg)
+
+    def _ensure_db(self):
+        if not self._db_enabled():
+            return False
+        with psycopg.connect(self.database_url) as conn:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS autobrillo_oauth_tokens (
+                    token_key TEXT PRIMARY KEY,
+                    token_encrypted BYTEA NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
+            conn.commit()
+        return True
+
+    def _save_token(self, token):
+        encrypted = self._fernet().encrypt(json.dumps(token).encode())
+        if self._db_enabled():
+            self._ensure_db()
+            with psycopg.connect(self.database_url) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO autobrillo_oauth_tokens (token_key, token_encrypted, updated_at)
+                    VALUES (%s, %s, NOW())
+                    ON CONFLICT (token_key) DO UPDATE SET
+                        token_encrypted = EXCLUDED.token_encrypted,
+                        updated_at = NOW()
+                    """,
+                    (self.TOKEN_DB_KEY, encrypted),
+                )
+                conn.commit()
+            return
+        with open(self.token_file, "wb") as f:
+            f.write(encrypted)
 
     def start(self):
         if not self.configured():
@@ -86,7 +132,7 @@ class MercadoLibreOAuth:
             headers={
                 "Accept": "application/json",
                 "Content-Type": "application/x-www-form-urlencoded",
-                "User-Agent": "AutoBrillo-AI/5.1",
+                "User-Agent": "AutoBrillo-AI/6.3",
             },
         )
 
@@ -112,8 +158,7 @@ class MercadoLibreOAuth:
                 f"Mercado Libre rechazó el intercambio (HTTP {exc.code}): {detail}"
             ) from None
 
-        with open(self.token_file, "wb") as f:
-            f.write(self._fernet().encrypt(json.dumps(token).encode()))
+        self._save_token(token)
         try:
             os.remove(self.state_file)
         except OSError:
@@ -121,5 +166,18 @@ class MercadoLibreOAuth:
         return token
 
     def load_token(self):
+        if self._db_enabled():
+            try:
+                self._ensure_db()
+                with psycopg.connect(self.database_url) as conn:
+                    row = conn.execute(
+                        "SELECT token_encrypted FROM autobrillo_oauth_tokens WHERE token_key = %s",
+                        (self.TOKEN_DB_KEY,),
+                    ).fetchone()
+                if row:
+                    return json.loads(self._fernet().decrypt(bytes(row[0])).decode())
+            except Exception:
+                # Fall back to the local file so an existing installation keeps working.
+                pass
         with open(self.token_file, "rb") as f:
             return json.loads(self._fernet().decrypt(f.read()).decode())
