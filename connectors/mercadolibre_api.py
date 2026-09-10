@@ -9,7 +9,11 @@ from connectors.mercadolibre_oauth import MercadoLibreOAuth
 
 
 class MercadoLibreAPI:
-    """Cliente de Mercado Libre para catálogo y operaciones del seller."""
+    """Cliente de Mercado Libre.
+
+    El descubrimiento público de productos no requiere OAuth. Las operaciones
+    de cuenta/vendedor siguen usando el access token autenticado.
+    """
 
     BASE_URL = "https://api.mercadolibre.com"
 
@@ -34,9 +38,10 @@ class MercadoLibreAPI:
             return {"data": data}
         return data
 
-    def request(self, method: str, path: str, **kwargs: Any) -> dict[str, Any]:
+    def request(self, method: str, path: str, *, authenticated: bool = True, **kwargs: Any) -> dict[str, Any]:
         headers = dict(kwargs.pop("headers", {}) or {})
-        headers["Authorization"] = f"Bearer {self._token()}"
+        if authenticated:
+            headers["Authorization"] = f"Bearer {self._token()}"
         headers.setdefault("Accept", "application/json")
         response = requests.request(
             method,
@@ -54,41 +59,23 @@ class MercadoLibreAPI:
         return data
 
     def me(self) -> dict[str, Any]:
-        return self.request("GET", "/users/me")
+        return self.request("GET", "/users/me", authenticated=True)
 
     def search(self, query: str, limit: int = 5) -> dict[str, Any]:
-        """Busca productos de catálogo usando el recurso soportado para consultas por texto.
-
-        /sites/{site}/search ya no debe usarse como buscador genérico por q para
-        este flujo: la documentación vigente dirige las búsquedas de catálogo a
-        /products/search con site_id, status y q. Después enriquecemos cada
-        producto con /products/{id} para obtener buy_box_winner, precio y enlace.
-        """
+        """Busca publicaciones públicas del marketplace mexicano sin bloquear el descubrimiento por OAuth."""
         query = query.strip()
         if not query:
             raise ValueError("La búsqueda no puede estar vacía.")
         limit = max(1, min(int(limit), 20))
-        data = self.request(
+        return self.request(
             "GET",
-            "/products/search",
-            params={"status": "active", "site_id": self.site, "q": query, "limit": limit},
+            f"/sites/{self.site}/search",
+            authenticated=False,
+            params={"q": query, "limit": limit},
         )
-
-        results = []
-        for item in data.get("results", [])[:limit]:
-            product_id = str(item.get("id") or "").strip()
-            if not product_id:
-                continue
-            try:
-                detail = self.request("GET", f"/products/{product_id}")
-            except RuntimeError:
-                detail = item
-            results.append(detail)
-        data["results"] = results
-        return data
 
     def item(self, item_id: str) -> dict[str, Any]:
         item_id = item_id.strip()
         if not item_id:
             raise ValueError("Falta el ID del producto.")
-        return self.request("GET", f"/items/{item_id}")
+        return self.request("GET", f"/items/{item_id}", authenticated=False)
