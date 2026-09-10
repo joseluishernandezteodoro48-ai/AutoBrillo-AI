@@ -5,12 +5,14 @@ from fastapi.responses import PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from autobrillo import Product, SalesAgent
+from brillo import Brillo
 from connectors.mercadolibre_oauth import MercadoLibreOAuth
 from goal_agent import GoalAgent
 
-app = FastAPI(title='AutoBrillo AI API', version='6.0')
+app = FastAPI(title='AutoBrillo AI API', version='6.1')
 oauth = MercadoLibreOAuth()
 agent = SalesAgent()
+brillo = Brillo(agent)
 goals = GoalAgent(agent.memory)
 
 class LearnRequest(BaseModel):
@@ -22,6 +24,9 @@ class ProductRequest(BaseModel):
     price: float = Field(gt=0)
     cost: float = Field(default=0, ge=0)
     commission: float = Field(default=0, ge=0)
+    shipping_cost: float = Field(default=0, ge=0)
+    fixed_fee: float = Field(default=0, ge=0)
+    tax_rate: float = Field(default=0, ge=0, le=1)
     url: str = ''
 
 class PermissionRequest(BaseModel):
@@ -30,6 +35,10 @@ class PermissionRequest(BaseModel):
 
 class GoalRequest(BaseModel):
     text: str = Field(min_length=3, max_length=1000)
+
+class BrilloRequest(BaseModel):
+    command: str = Field(min_length=1, max_length=1000)
+
 
 def require_admin(x_admin_key: str | None = Header(default=None)):
     expected = os.getenv('AUTOBRILLO_ADMIN_KEY', '')
@@ -40,23 +49,39 @@ def require_admin(x_admin_key: str | None = Header(default=None)):
 
 @app.get('/', response_class=PlainTextResponse)
 def root():
-    return 'AutoBrillo AI API activa.'
+    return 'AutoBrillo AI API activa. Brillo + Tygo listos.'
 
-@app.get('/health', response_class=PlainTextResponse)
+@app.get('/health')
 def health():
-    return 'ok'
+    return {
+        'status': 'ok',
+        'service': 'AutoBrillo AI',
+        'version': 'v6.1',
+        'brain_ready': agent.brain.ready,
+        'brillo_ready': True,
+        'mercadolibre_configured': oauth.configured(),
+    }
 
 @app.get('/api/status')
 def status():
     return {
         'service': 'AutoBrillo AI',
-        'version': 'v6.0',
+        'version': 'v6.1',
         'brain_ready': agent.brain.ready,
         'products': len(agent.catalog.products),
         'active_goals': len(goals.list_active()),
         'dry_run': agent.dry_run,
         'kill_switch': agent.kill,
+        'brillo': 'ready',
+        'tygo': 'ready',
     }
+
+@app.post('/api/brillo', dependencies=[Depends(require_admin)])
+def brillo_command(request: BrilloRequest):
+    try:
+        return brillo.respond(request.command)
+    except Exception as exc:
+        raise HTTPException(400, f'Brillo no pudo procesar la orden: {exc}') from exc
 
 @app.get('/api/plan', dependencies=[Depends(require_admin)])
 def plan(limit: int = 5):
@@ -96,7 +121,11 @@ def products():
 @app.post('/api/products', dependencies=[Depends(require_admin)])
 def add_product(request: ProductRequest):
     try:
-        product = Product(request.name, request.price, request.cost, request.commission, request.url)
+        product = Product(
+            request.name, request.price, request.cost, request.commission, request.url,
+            shipping_cost=request.shipping_cost, fixed_fee=request.fixed_fee,
+            tax_rate=request.tax_rate, cost_known=request.cost > 0,
+        )
         agent.catalog.add(product)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
