@@ -48,12 +48,12 @@ def status(): return {'service':'AutoBrillo AI','version':'v6.3','brain_ready':a
 def mercadolibre_me():
     try: return ml_api.me()
     except Exception as exc: raise HTTPException(400,f'No se pudo consultar Mercado Libre: {exc}') from exc
-@app.get('/api/mercadolibre/search', dependencies=[Depends(require_admin)])
+@app.get('/api/mercadolibre/search')
 def mercadolibre_search(q: str, limit: int=5):
     if not 1 <= limit <= 50: raise HTTPException(400,'limit debe estar entre 1 y 50.')
     try: return ml_api.search(q,limit)
     except Exception as exc: raise HTTPException(400,f'No se pudo buscar en Mercado Libre: {exc}') from exc
-@app.get('/api/mercadolibre/item/{item_id}', dependencies=[Depends(require_admin)])
+@app.get('/api/mercadolibre/item/{item_id}')
 def mercadolibre_item(item_id: str):
     try: return ml_api.item(item_id)
     except Exception as exc: raise HTTPException(400,f'No se pudo consultar el producto: {exc}') from exc
@@ -62,11 +62,11 @@ def mercadolibre_item(item_id: str):
 def brillo_command(request: BrilloRequest):
     try: return brillo.respond(request.command)
     except Exception as exc: raise HTTPException(400,f'Brillo no pudo procesar la orden: {exc}') from exc
-@app.get('/api/plan', dependencies=[Depends(require_admin)])
+@app.get('/api/plan')
 def plan(limit:int=5):
     if not 1<=limit<=50: raise HTTPException(400,'limit debe estar entre 1 y 50.')
     return {'tasks':agent.plan(limit)}
-@app.post('/api/cycle', dependencies=[Depends(require_admin)])
+@app.post('/api/cycle')
 def cycle(limit:int=5):
     if not 1<=limit<=50: raise HTTPException(400,'limit debe estar entre 1 y 50.')
     return agent.run_cycle(limit)
