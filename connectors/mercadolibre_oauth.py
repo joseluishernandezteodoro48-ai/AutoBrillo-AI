@@ -32,7 +32,6 @@ class MercadoLibreOAuth:
         self.token_key = os.getenv("AUTOBRILLO_TOKEN_KEY", "")
         self.database_url = os.getenv("DATABASE_URL", "")
         self.site = os.getenv("ML_SITE", "MLM")
-        # Mercado Libre only requires PKCE when it is enabled in the application.
         self.pkce_enabled = os.getenv("ML_PKCE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
 
     def configured(self):
@@ -83,40 +82,48 @@ class MercadoLibreOAuth:
     def _save_token(self, token):
         encrypted = self._fernet().encrypt(json.dumps(token).encode())
         if self._db_enabled():
-            self._ensure_db()
-            with psycopg.connect(self._db_url()) as conn:
-                conn.execute(
-                    """
-                    INSERT INTO autobrillo_oauth_tokens (token_key, token_encrypted, updated_at)
-                    VALUES (%s, %s, NOW())
-                    ON CONFLICT (token_key) DO UPDATE SET
-                        token_encrypted = EXCLUDED.token_encrypted,
-                        updated_at = NOW()
-                    """,
-                    (self.TOKEN_DB_KEY, encrypted),
-                )
-                conn.commit()
-            return
+            try:
+                self._ensure_db()
+                with psycopg.connect(self._db_url()) as conn:
+                    conn.execute(
+                        """
+                        INSERT INTO autobrillo_oauth_tokens (token_key, token_encrypted, updated_at)
+                        VALUES (%s, %s, NOW())
+                        ON CONFLICT (token_key) DO UPDATE SET
+                            token_encrypted = EXCLUDED.token_encrypted,
+                            updated_at = NOW()
+                        """,
+                        (self.TOKEN_DB_KEY, encrypted),
+                    )
+                    conn.commit()
+                return
+            except Exception:
+                # Keep OAuth usable during a temporary DB outage.
+                pass
         with open(self.token_file, "wb") as f:
             f.write(encrypted)
 
     def _save_state(self, state_data):
+        encrypted = self._fernet().encrypt(json.dumps(state_data).encode())
         if self._db_enabled():
-            encrypted = self._fernet().encrypt(json.dumps(state_data).encode())
-            self._ensure_db()
-            with psycopg.connect(self._db_url()) as conn:
-                conn.execute(
-                    """
-                    INSERT INTO autobrillo_oauth_state (state_key, state_encrypted, updated_at)
-                    VALUES (%s, %s, NOW())
-                    ON CONFLICT (state_key) DO UPDATE SET
-                        state_encrypted = EXCLUDED.state_encrypted,
-                        updated_at = NOW()
-                    """,
-                    (self.STATE_DB_PREFIX + state_data["state"], encrypted),
-                )
-                conn.commit()
-            return
+            try:
+                self._ensure_db()
+                with psycopg.connect(self._db_url()) as conn:
+                    conn.execute(
+                        """
+                        INSERT INTO autobrillo_oauth_state (state_key, state_encrypted, updated_at)
+                        VALUES (%s, %s, NOW())
+                        ON CONFLICT (state_key) DO UPDATE SET
+                            state_encrypted = EXCLUDED.state_encrypted,
+                            updated_at = NOW()
+                        """,
+                        (self.STATE_DB_PREFIX + state_data["state"], encrypted),
+                    )
+                    conn.commit()
+                return
+            except Exception:
+                # A transient DB failure must not turn /oauth/start into a 500.
+                pass
         with open(self.state_file, "w", encoding="utf-8") as f:
             json.dump(state_data, f)
 
@@ -131,13 +138,17 @@ class MercadoLibreOAuth:
                     ).fetchone()
                 if row:
                     return json.loads(self._fernet().decrypt(bytes(row[0])).decode())
-                raise FileNotFoundError
-            except FileNotFoundError:
-                raise
-            except Exception as exc:
-                raise RuntimeError(f"No se pudo recuperar el estado OAuth: {self._safe_error_text(str(exc))}") from None
-        with open(self.state_file, encoding="utf-8") as f:
-            return json.load(f)
+            except Exception:
+                # Fall through to the short-lived local OAuth state file.
+                pass
+        try:
+            with open(self.state_file, encoding="utf-8") as f:
+                saved = json.load(f)
+        except FileNotFoundError:
+            raise
+        if saved.get("state") != state:
+            raise FileNotFoundError
+        return saved
 
     def _delete_state(self, state):
         if self._db_enabled():
