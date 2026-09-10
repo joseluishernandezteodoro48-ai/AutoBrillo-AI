@@ -35,16 +35,28 @@ class MercadoLibreOAuth:
     def configured(self):
         return all((self.client_id, self.client_secret, self.redirect_uri, self.token_key))
 
+    def database_configured(self):
+        return bool(self.database_url and psycopg)
+
+    def _db_url(self):
+        """Render Postgres requires TLS; add it when the supplied URL omits it."""
+        if not self.database_url:
+            return ""
+        if "sslmode=" in self.database_url.lower():
+            return self.database_url
+        separator = "&" if "?" in self.database_url else "?"
+        return f"{self.database_url}{separator}sslmode=require"
+
     def _fernet(self):
         return Fernet(self.token_key.encode())
 
     def _db_enabled(self):
-        return bool(self.database_url and psycopg)
+        return self.database_configured()
 
     def _ensure_db(self):
         if not self._db_enabled():
             return False
-        with psycopg.connect(self.database_url) as conn:
+        with psycopg.connect(self._db_url()) as conn:
             conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS autobrillo_oauth_tokens (
@@ -61,7 +73,7 @@ class MercadoLibreOAuth:
         encrypted = self._fernet().encrypt(json.dumps(token).encode())
         if self._db_enabled():
             self._ensure_db()
-            with psycopg.connect(self.database_url) as conn:
+            with psycopg.connect(self._db_url()) as conn:
                 conn.execute(
                     """
                     INSERT INTO autobrillo_oauth_tokens (token_key, token_encrypted, updated_at)
@@ -169,7 +181,7 @@ class MercadoLibreOAuth:
         if self._db_enabled():
             try:
                 self._ensure_db()
-                with psycopg.connect(self.database_url) as conn:
+                with psycopg.connect(self._db_url()) as conn:
                     row = conn.execute(
                         "SELECT token_encrypted FROM autobrillo_oauth_tokens WHERE token_key = %s",
                         (self.TOKEN_DB_KEY,),
