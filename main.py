@@ -7,10 +7,12 @@ from pydantic import BaseModel, Field
 from autobrillo import Product, SalesAgent
 from brillo import Brillo
 from connectors.mercadolibre_oauth import MercadoLibreOAuth
+from connectors.mercadolibre_api import MercadoLibreAPI
 from goal_agent import GoalAgent
 
-app = FastAPI(title='AutoBrillo AI API', version='6.1')
+app = FastAPI(title='AutoBrillo AI API', version='6.2')
 oauth = MercadoLibreOAuth()
+ml_api = MercadoLibreAPI(oauth)
 agent = SalesAgent()
 brillo = Brillo(agent)
 goals = GoalAgent(agent.memory)
@@ -18,144 +20,82 @@ goals = GoalAgent(agent.memory)
 class LearnRequest(BaseModel):
     text: str = Field(min_length=1, max_length=5000)
     label: str = Field(min_length=1, max_length=200)
-
 class ProductRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=300)
-    price: float = Field(gt=0)
-    cost: float = Field(default=0, ge=0)
-    commission: float = Field(default=0, ge=0)
-    shipping_cost: float = Field(default=0, ge=0)
-    fixed_fee: float = Field(default=0, ge=0)
-    tax_rate: float = Field(default=0, ge=0, le=1)
-    url: str = ''
-
+    name: str = Field(min_length=1, max_length=300); price: float = Field(gt=0); cost: float = Field(default=0, ge=0); commission: float = Field(default=0, ge=0); shipping_cost: float = Field(default=0, ge=0); fixed_fee: float = Field(default=0, ge=0); tax_rate: float = Field(default=0, ge=0, le=1); url: str = ''
 class PermissionRequest(BaseModel):
-    name: str = Field(min_length=1, max_length=50)
-    enabled: bool = True
-
-class GoalRequest(BaseModel):
-    text: str = Field(min_length=3, max_length=1000)
-
-class BrilloRequest(BaseModel):
-    command: str = Field(min_length=1, max_length=1000)
-
+    name: str = Field(min_length=1, max_length=50); enabled: bool = True
+class GoalRequest(BaseModel): text: str = Field(min_length=3, max_length=1000)
+class BrilloRequest(BaseModel): command: str = Field(min_length=1, max_length=1000)
 
 def require_admin(x_admin_key: str | None = Header(default=None)):
-    expected = os.getenv('AUTOBRILLO_ADMIN_KEY', '')
-    if not expected:
-        raise HTTPException(503, 'API administrativa no configurada.')
-    if not x_admin_key or not hmac.compare_digest(x_admin_key, expected):
-        raise HTTPException(401, 'No autorizado.')
+    expected=os.getenv('AUTOBRILLO_ADMIN_KEY','')
+    if not expected: raise HTTPException(503,'API administrativa no configurada.')
+    if not x_admin_key or not hmac.compare_digest(x_admin_key,expected): raise HTTPException(401,'No autorizado.')
 
 @app.get('/', response_class=PlainTextResponse)
-def root():
-    return 'AutoBrillo AI API activa. Brillo + Tygo listos.'
-
+def root(): return 'AutoBrillo AI API activa. Brillo + Tygo listos.'
 @app.get('/health')
-def health():
-    return {
-        'status': 'ok',
-        'service': 'AutoBrillo AI',
-        'version': 'v6.1',
-        'brain_ready': agent.brain.ready,
-        'brillo_ready': True,
-        'mercadolibre_configured': oauth.configured(),
-    }
-
+def health(): return {'status':'ok','service':'AutoBrillo AI','version':'v6.2','brain_ready':agent.brain.ready,'brillo_ready':True,'mercadolibre_configured':oauth.configured()}
 @app.get('/api/status')
-def status():
-    return {
-        'service': 'AutoBrillo AI',
-        'version': 'v6.1',
-        'brain_ready': agent.brain.ready,
-        'products': len(agent.catalog.products),
-        'active_goals': len(goals.list_active()),
-        'dry_run': agent.dry_run,
-        'kill_switch': agent.kill,
-        'brillo': 'ready',
-        'tygo': 'ready',
-    }
+def status(): return {'service':'AutoBrillo AI','version':'v6.2','brain_ready':agent.brain.ready,'products':len(agent.catalog.products),'active_goals':len(goals.list_active()),'dry_run':agent.dry_run,'kill_switch':agent.kill,'brillo':'ready','tygo':'ready','mercadolibre_configured':oauth.configured()}
+
+@app.get('/api/mercadolibre/me', dependencies=[Depends(require_admin)])
+def mercadolibre_me():
+    try: return ml_api.me()
+    except Exception as exc: raise HTTPException(400,f'No se pudo consultar Mercado Libre: {exc}') from exc
+@app.get('/api/mercadolibre/search', dependencies=[Depends(require_admin)])
+def mercadolibre_search(q: str, limit: int=5):
+    try: return ml_api.search(q,limit)
+    except Exception as exc: raise HTTPException(400,f'No se pudo buscar en Mercado Libre: {exc}') from exc
+@app.get('/api/mercadolibre/item/{item_id}', dependencies=[Depends(require_admin)])
+def mercadolibre_item(item_id: str):
+    try: return ml_api.item(item_id)
+    except Exception as exc: raise HTTPException(400,f'No se pudo consultar el producto: {exc}') from exc
 
 @app.post('/api/brillo', dependencies=[Depends(require_admin)])
 def brillo_command(request: BrilloRequest):
-    try:
-        return brillo.respond(request.command)
-    except Exception as exc:
-        raise HTTPException(400, f'Brillo no pudo procesar la orden: {exc}') from exc
-
+    try: return brillo.respond(request.command)
+    except Exception as exc: raise HTTPException(400,f'Brillo no pudo procesar la orden: {exc}') from exc
 @app.get('/api/plan', dependencies=[Depends(require_admin)])
-def plan(limit: int = 5):
-    if not 1 <= limit <= 50:
-        raise HTTPException(400, 'limit debe estar entre 1 y 50.')
-    return {'tasks': agent.plan(limit)}
-
+def plan(limit:int=5):
+    if not 1<=limit<=50: raise HTTPException(400,'limit debe estar entre 1 y 50.')
+    return {'tasks':agent.plan(limit)}
 @app.post('/api/cycle', dependencies=[Depends(require_admin)])
-def cycle(limit: int = 5):
-    if not 1 <= limit <= 50:
-        raise HTTPException(400, 'limit debe estar entre 1 y 50.')
+def cycle(limit:int=5):
+    if not 1<=limit<=50: raise HTTPException(400,'limit debe estar entre 1 y 50.')
     return agent.run_cycle(limit)
-
 @app.post('/api/goal', dependencies=[Depends(require_admin)])
-def create_goal(request: GoalRequest):
-    try:
-        goal = goals.create(request.text)
-        plan = goals.plan(goal)
-        execution = goals.execute_safe(goal, agent)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-    return {'ok': True, 'goal': goal.__dict__, 'plan': plan, 'execution': execution}
-
+def create_goal(request:GoalRequest):
+    try: goal=goals.create(request.text); plan=goals.plan(goal); execution=goals.execute_safe(goal,agent)
+    except ValueError as exc: raise HTTPException(400,str(exc))
+    return {'ok':True,'goal':goal.__dict__,'plan':plan,'execution':execution}
 @app.get('/api/goals', dependencies=[Depends(require_admin)])
-def list_goals():
-    return {'goals': goals.list_active()}
-
+def list_goals(): return {'goals':goals.list_active()}
 @app.post('/api/learn', dependencies=[Depends(require_admin)])
-def learn(request: LearnRequest):
-    agent.learn(request.text, request.label)
-    return {'ok': True, 'message': 'Aprendizaje guardado.', 'brain_ready': agent.brain.ready}
-
+def learn(request:LearnRequest): agent.learn(request.text,request.label); return {'ok':True,'message':'Aprendizaje guardado.','brain_ready':agent.brain.ready}
 @app.get('/api/products', dependencies=[Depends(require_admin)])
-def products():
-    return {'products': [p.__dict__ for p in agent.catalog.products]}
-
+def products(): return {'products':[p.__dict__ for p in agent.catalog.products]}
 @app.post('/api/products', dependencies=[Depends(require_admin)])
-def add_product(request: ProductRequest):
+def add_product(request:ProductRequest):
     try:
-        product = Product(
-            request.name, request.price, request.cost, request.commission, request.url,
-            shipping_cost=request.shipping_cost, fixed_fee=request.fixed_fee,
-            tax_rate=request.tax_rate, cost_known=request.cost > 0,
-        )
-        agent.catalog.add(product)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-    return {'ok': True, 'product': product.__dict__}
-
+        product=Product(request.name,request.price,request.cost,request.commission,request.url,shipping_cost=request.shipping_cost,fixed_fee=request.fixed_fee,tax_rate=request.tax_rate,cost_known=request.cost>0); agent.catalog.add(product)
+    except ValueError as exc: raise HTTPException(400,str(exc))
+    return {'ok':True,'product':product.__dict__}
 @app.post('/api/permissions', dependencies=[Depends(require_admin)])
-def set_permission(request: PermissionRequest):
-    try:
-        agent.memory.set_permission(request.name, request.enabled)
-    except ValueError as exc:
-        raise HTTPException(400, str(exc))
-    return {'ok': True, 'name': request.name, 'enabled': request.enabled}
+def set_permission(request:PermissionRequest):
+    try: agent.memory.set_permission(request.name,request.enabled)
+    except ValueError as exc: raise HTTPException(400,str(exc))
+    return {'ok':True,'name':request.name,'enabled':request.enabled}
 
 @app.get('/oauth/mercadolibre/start')
 def start_oauth():
-    if not oauth.configured():
-        raise HTTPException(503, 'Mercado Libre OAuth no está configurado.')
-    return RedirectResponse(url=oauth.start(), status_code=302)
-
+    if not oauth.configured(): raise HTTPException(503,'Mercado Libre OAuth no está configurado.')
+    return RedirectResponse(url=oauth.start(),status_code=302)
 @app.get('/oauth/mercadolibre/callback', response_class=PlainTextResponse)
-def oauth_callback(code: str | None = None, state: str | None = None):
-    if not code or not state:
-        raise HTTPException(400, 'Faltan code o state.')
-    try:
-        oauth.exchange(code, state)
-    except Exception as exc:
-        raise HTTPException(400, f'No se pudo completar OAuth: {exc}')
+def oauth_callback(code:str|None=None,state:str|None=None):
+    if not code or not state: raise HTTPException(400,'Faltan code o state.')
+    try: oauth.exchange(code,state)
+    except Exception as exc: raise HTTPException(400,f'No se pudo completar OAuth: {exc}')
     return 'AutoBrillo AI: Mercado Libre conectado correctamente. Ya puedes cerrar esta ventana.'
-
-@app.post('/webhooks/mercadolibre', status_code=200)
-async def mercadolibre_webhook(payload: dict):
-    agent.memory.remember('mercadolibre_webhook', {'received': True, 'keys': sorted(payload.keys())[:20]}, 'received')
-    return {'ok': True}
+@app.post('/webhooks/mercadolibre',status_code=200)
+async def mercadolibre_webhook(payload:dict): agent.memory.remember('mercadolibre_webhook',{'received':True,'keys':sorted(payload.keys())[:20]},'received'); return {'ok':True}
