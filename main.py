@@ -58,7 +58,7 @@ def mercadolibre_item(item_id: str):
     try: return ml_api.item(item_id)
     except Exception as exc: raise HTTPException(400,f'No se pudo consultar el producto: {exc}') from exc
 
-@app.post('/api/brillo', dependencies=[Depends(require_admin)])
+@app.post('/api/brillo')
 def brillo_command(request: BrilloRequest):
     try: return brillo.respond(request.command)
     except Exception as exc: raise HTTPException(400,f'Brillo no pudo procesar la orden: {exc}') from exc
