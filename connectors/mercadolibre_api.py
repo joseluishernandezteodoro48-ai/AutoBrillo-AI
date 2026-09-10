@@ -11,8 +11,8 @@ from connectors.mercadolibre_oauth import MercadoLibreOAuth
 class MercadoLibreAPI:
     """Cliente de Mercado Libre.
 
-    El descubrimiento público de productos no requiere OAuth. Las operaciones
-    de cuenta/vendedor siguen usando el access token autenticado.
+    La búsqueda de publicaciones puede funcionar con el access token o como
+    consulta pública. Las operaciones de cuenta/vendedor siguen usando token.
     """
 
     BASE_URL = "https://api.mercadolibre.com"
@@ -21,12 +21,16 @@ class MercadoLibreAPI:
         self.oauth = oauth or MercadoLibreOAuth()
         self.timeout = float(os.getenv("ML_API_TIMEOUT", "20"))
         self.site = os.getenv("ML_SITE", "MLM").strip().upper() or "MLM"
+        self.user_agent = os.getenv(
+            "ML_API_USER_AGENT",
+            "AutoBrillo-AI/6.4 (Mercado Libre integration)",
+        )
 
     def _token(self) -> str:
-        token = self.oauth.load_token()
-        if not token or not token.get("access_token"):
+        token = self.oauth.access_token()
+        if not token:
             raise RuntimeError("Mercado Libre no está autorizado todavía.")
-        return str(token["access_token"])
+        return str(token)
 
     @staticmethod
     def _decode_response(response: requests.Response) -> dict[str, Any]:
@@ -43,6 +47,7 @@ class MercadoLibreAPI:
         if authenticated:
             headers["Authorization"] = f"Bearer {self._token()}"
         headers.setdefault("Accept", "application/json")
+        headers.setdefault("User-Agent", self.user_agent)
         response = requests.request(
             method,
             f"{self.BASE_URL}{path}",
@@ -62,17 +67,26 @@ class MercadoLibreAPI:
         return self.request("GET", "/users/me", authenticated=True)
 
     def search(self, query: str, limit: int = 5) -> dict[str, Any]:
-        """Busca publicaciones públicas del marketplace mexicano sin bloquear el descubrimiento por OAuth."""
+        """Busca publicaciones de MLM.
+
+        Primero usa el token conectado para aprovechar los permisos de la app.
+        Si Mercado Libre bloquea esa modalidad por políticas/permisos, reintenta
+        como búsqueda pública, que es el recurso de descubrimiento del catálogo.
+        """
         query = query.strip()
         if not query:
             raise ValueError("La búsqueda no puede estar vacía.")
         limit = max(1, min(int(limit), 20))
-        return self.request(
-            "GET",
-            f"/sites/{self.site}/search",
-            authenticated=False,
-            params={"q": query, "limit": limit},
-        )
+        path = f"/sites/{self.site}/search"
+        params = {"q": query, "limit": limit}
+
+        try:
+            if self.oauth.access_token():
+                return self.request("GET", path, authenticated=True, params=params)
+        except Exception:
+            pass
+
+        return self.request("GET", path, authenticated=False, params=params)
 
     def item(self, item_id: str) -> dict[str, Any]:
         item_id = item_id.strip()
