@@ -10,7 +10,7 @@ from connectors.mercadolibre_oauth import MercadoLibreOAuth
 from connectors.mercadolibre_api import MercadoLibreAPI
 from goal_agent import GoalAgent
 
-app = FastAPI(title='AutoBrillo AI API', version='6.2')
+app = FastAPI(title='AutoBrillo AI API', version='6.3')
 oauth = MercadoLibreOAuth()
 ml_api = MercadoLibreAPI(oauth)
 agent = SalesAgent()
@@ -32,12 +32,15 @@ def require_admin(x_admin_key: str | None = Header(default=None)):
     if not expected: raise HTTPException(503,'API administrativa no configurada.')
     if not x_admin_key or not hmac.compare_digest(x_admin_key,expected): raise HTTPException(401,'No autorizado.')
 
+def persistence_status():
+    return {'postgres_configured':oauth.database_configured(),'token_storage':'postgresql' if oauth.database_configured() else 'local_fallback'}
+
 @app.get('/', response_class=PlainTextResponse)
 def root(): return 'AutoBrillo AI API activa. Brillo + Tygo listos.'
 @app.get('/health')
-def health(): return {'status':'ok','service':'AutoBrillo AI','version':'v6.2','brain_ready':agent.brain.ready,'brillo_ready':True,'mercadolibre_configured':oauth.configured()}
+def health(): return {'status':'ok','service':'AutoBrillo AI','version':'v6.3','brain_ready':agent.brain.ready,'brillo_ready':True,'mercadolibre_configured':oauth.configured(),**persistence_status()}
 @app.get('/api/status')
-def status(): return {'service':'AutoBrillo AI','version':'v6.2','brain_ready':agent.brain.ready,'products':len(agent.catalog.products),'active_goals':len(goals.list_active()),'dry_run':agent.dry_run,'kill_switch':agent.kill,'brillo':'ready','tygo':'ready','mercadolibre_configured':oauth.configured()}
+def status(): return {'service':'AutoBrillo AI','version':'v6.3','brain_ready':agent.brain.ready,'products':len(agent.catalog.products),'active_goals':len(goals.list_active()),'dry_run':agent.dry_run,'kill_switch':agent.kill,'brillo':'ready','tygo':'ready','mercadolibre_configured':oauth.configured(),**persistence_status()}
 
 @app.get('/api/mercadolibre/me', dependencies=[Depends(require_admin)])
 def mercadolibre_me():
@@ -45,6 +48,7 @@ def mercadolibre_me():
     except Exception as exc: raise HTTPException(400,f'No se pudo consultar Mercado Libre: {exc}') from exc
 @app.get('/api/mercadolibre/search', dependencies=[Depends(require_admin)])
 def mercadolibre_search(q: str, limit: int=5):
+    if not 1 <= limit <= 50: raise HTTPException(400,'limit debe estar entre 1 y 50.')
     try: return ml_api.search(q,limit)
     except Exception as exc: raise HTTPException(400,f'No se pudo buscar en Mercado Libre: {exc}') from exc
 @app.get('/api/mercadolibre/item/{item_id}', dependencies=[Depends(require_admin)])
