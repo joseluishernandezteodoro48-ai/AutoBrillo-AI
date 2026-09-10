@@ -1,4 +1,4 @@
-"""Brillo: interfaz de órdenes y orquestación de AutoBrillo AI."""
+"""Brillo v6: interfaz de órdenes y orquestación de AutoBrillo AI."""
 from __future__ import annotations
 
 import argparse
@@ -30,7 +30,7 @@ class Brillo:
         return {"raw": text, "intent": intent, "product_count": max(1, min(count, 50)), "publish_requested": wants_publish}
 
     def source(self, query: str, count: int = 5) -> Dict[str, Any]:
-        """Busca candidatos reales y los incorpora al catálogo para que Tygo los evalúe."""
+        """Busca candidatos reales y los incorpora al catálogo sin inventar costos."""
         candidates = search_products(query, count)
         added, skipped = [], []
         for item in candidates:
@@ -39,18 +39,19 @@ class Brillo:
                     name=item["name"], price=float(item["price"]), cost=float(item.get("cost", 0)),
                     commission=float(item.get("commission", 0)), url=item.get("url", ""),
                     active=bool(item.get("active", True)), score=float(item.get("score", 0)),
+                    shipping_cost=float(item.get("shipping_cost", 0)),
+                    fixed_fee=float(item.get("fixed_fee", 0)), tax_rate=float(item.get("tax_rate", 0)),
+                    cost_known=bool(item.get("cost_known", False)),
                 ))
                 added.append(item["name"])
             except ValueError:
                 skipped.append(item["name"])
         self.agent.memory.remember("product_source", {"query": query, "found": len(candidates), "added": len(added)}, "completed")
-        return {"found": len(candidates), "added": added, "skipped": skipped, "source": "mercadolibre"}
+        return {"found": len(candidates), "added": added, "skipped": skipped, "source": "mercadolibre", "cost_policy": "no asumir precio de venta como costo del proveedor"}
 
     def respond(self, command: str) -> Dict[str, Any]:
         intent = self.understand(command)
         if intent["intent"] in ("source_and_sell", "source"):
-            # La consulta de productos se obtiene del texto restante; si no hay una
-            # categoría clara, se usa una consulta genérica y se deja la selección a Tygo.
             query = re.sub(r"\b\d+\b", "", intent["raw"], count=1).strip()
             query = re.sub(r"\b(consigue|busca|buscar|encontrar|productos|y|vende|vender|venta)\b", " ", query, flags=re.I).strip() or "productos populares"
             try:
@@ -58,9 +59,12 @@ class Brillo:
             except ProductSourceError as exc:
                 return {"ok": False, "assistant": "Brillo", "brain": "Tygo/SalesAgent", "intent": intent, "error": str(exc)}
             plan = self.agent.plan(intent["product_count"])
+            ready = [x["product"] for x in plan if x.get("ready_to_sell")]
+            research = [x["product"] for x in plan if x.get("action") == "research_cost"]
             return {"ok": True, "assistant": "Brillo", "brain": "Tygo/SalesAgent", "intent": intent,
                     "source": source_result, "status": "planned", "plan": plan,
-                    "next": "evaluar candidatos y preparar venta; publicar/cobrar requiere autorización y conector oficial"}
+                    "summary": {"ready_to_sell": ready, "needs_supplier_cost": research},
+                    "next": "conseguir costo real del proveedor para candidatos sin costo; después preparar publicación/venta con conectores oficiales"}
 
         if intent["intent"] == "sell":
             plan = self.agent.plan(intent["product_count"])
@@ -73,7 +77,7 @@ class Brillo:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Brillo - interfaz de AutoBrillo AI")
+    parser = argparse.ArgumentParser(description="Brillo v6 - interfaz de AutoBrillo AI")
     parser.add_argument("command", nargs="+", help="Orden para Brillo")
     args = parser.parse_args()
     print(json.dumps(Brillo().respond(" ".join(args.command)), ensure_ascii=False, indent=2))
