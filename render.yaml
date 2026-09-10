@@ -17,6 +17,8 @@ services:
         value: /tmp/model_data.json
       - key: ML_SITE
         value: MLM
+      - key: ML_PKCE_ENABLED
+        value: "false"
       - key: ML_CLIENT_ID
         sync: false
       - key: ML_CLIENT_SECRET
