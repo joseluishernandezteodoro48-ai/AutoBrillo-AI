@@ -1,4 +1,4 @@
-"""Brillo v6: interfaz de órdenes y orquestación de AutoBrillo AI."""
+"""Brillo v6.1: interfaz de órdenes y orquestación de AutoBrillo AI."""
 from __future__ import annotations
 
 import argparse
@@ -8,6 +8,8 @@ from typing import Any, Dict
 
 from autobrillo import Product, SalesAgent
 from product_sources import ProductSourceError, search_products
+from supplier_sources import SupplierSourceError, search_suppliers
+from sourcing import compare_product_with_suppliers
 
 
 class Brillo:
@@ -30,7 +32,7 @@ class Brillo:
         return {"raw": text, "intent": intent, "product_count": max(1, min(count, 50)), "publish_requested": wants_publish}
 
     def source(self, query: str, count: int = 5) -> Dict[str, Any]:
-        """Busca candidatos reales y los incorpora al catálogo sin inventar costos."""
+        """Busca candidatos de venta y los incorpora al catálogo sin inventar costos."""
         candidates = search_products(query, count)
         added, skipped = [], []
         for item in candidates:
@@ -49,6 +51,22 @@ class Brillo:
         self.agent.memory.remember("product_source", {"query": query, "found": len(candidates), "added": len(added)}, "completed")
         return {"found": len(candidates), "added": added, "skipped": skipped, "source": "mercadolibre", "cost_policy": "no asumir precio de venta como costo del proveedor"}
 
+    def compare_suppliers(self, query: str, count: int = 5) -> Dict[str, Any]:
+        """Busca proveedores configurados y compara sus costos con candidatos del marketplace."""
+        products = search_products(query, count)
+        suppliers = search_suppliers(query, max(count * 3, 10))
+        comparisons = []
+        for product in products:
+            comparisons.extend(compare_product_with_suppliers(product, suppliers))
+        comparisons.sort(key=lambda x: (x["cost_known"], x["projected_margin"], x["match_score"]), reverse=True)
+        return {
+            "products_found": len(products),
+            "suppliers_found": len(suppliers),
+            "comparisons": comparisons[: max(1, count * 3)],
+            "ready": [x for x in comparisons if x["cost_known"] and x["projected_profit"] > 0][:count],
+            "needs_verification": [x for x in comparisons if not x["cost_known"]][:count],
+        }
+
     def respond(self, command: str) -> Dict[str, Any]:
         intent = self.understand(command)
         if intent["intent"] in ("source_and_sell", "source"):
@@ -56,15 +74,16 @@ class Brillo:
             query = re.sub(r"\b(consigue|busca|buscar|encontrar|productos|y|vende|vender|venta)\b", " ", query, flags=re.I).strip() or "productos populares"
             try:
                 source_result = self.source(query, intent["product_count"])
-            except ProductSourceError as exc:
+                supplier_result = self.compare_suppliers(query, intent["product_count"])
+            except (ProductSourceError, SupplierSourceError) as exc:
                 return {"ok": False, "assistant": "Brillo", "brain": "Tygo/SalesAgent", "intent": intent, "error": str(exc)}
             plan = self.agent.plan(intent["product_count"])
             ready = [x["product"] for x in plan if x.get("ready_to_sell")]
             research = [x["product"] for x in plan if x.get("action") == "research_cost"]
             return {"ok": True, "assistant": "Brillo", "brain": "Tygo/SalesAgent", "intent": intent,
-                    "source": source_result, "status": "planned", "plan": plan,
+                    "source": source_result, "supplier_comparison": supplier_result, "status": "planned", "plan": plan,
                     "summary": {"ready_to_sell": ready, "needs_supplier_cost": research},
-                    "next": "conseguir costo real del proveedor para candidatos sin costo; después preparar publicación/venta con conectores oficiales"}
+                    "next": "usar solo costos de proveedor verificados; después preparar publicación/venta con conectores oficiales"}
 
         if intent["intent"] == "sell":
             plan = self.agent.plan(intent["product_count"])
@@ -73,11 +92,11 @@ class Brillo:
                     "next": "conectar canal de venta oficial", "financial_actions": "requieren autorización/conector oficial"}
 
         return {"ok": True, "assistant": "Brillo", "intent": intent,
-                "status": "understood", "available": ["think", "plan", "learn", "source", "sell"]}
+                "status": "understood", "available": ["think", "plan", "learn", "source", "compare_suppliers", "sell"]}
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Brillo v6 - interfaz de AutoBrillo AI")
+    parser = argparse.ArgumentParser(description="Brillo v6.1 - interfaz de AutoBrillo AI")
     parser.add_argument("command", nargs="+", help="Orden para Brillo")
     args = parser.parse_args()
     print(json.dumps(Brillo().respond(" ".join(args.command)), ensure_ascii=False, indent=2))
