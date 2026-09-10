@@ -21,6 +21,7 @@ class MercadoLibreOAuth:
     AUTH_URL = "https://auth.mercadolibre.com.mx/authorization"
     TOKEN_URL = "https://api.mercadolibre.com/oauth/token"
     TOKEN_DB_KEY = "mercadolibre_primary"
+    STATE_DB_KEY = "mercadolibre_oauth_state"
 
     def __init__(self):
         self.client_id = os.getenv("ML_CLIENT_ID", "")
@@ -31,6 +32,7 @@ class MercadoLibreOAuth:
         self.token_key = os.getenv("AUTOBRILLO_TOKEN_KEY", "")
         self.database_url = os.getenv("DATABASE_URL", "")
         self.site = os.getenv("ML_SITE", "MLM")
+        self.pkce_enabled = os.getenv("ML_PKCE_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
 
     def configured(self):
         return all((self.client_id, self.client_secret, self.redirect_uri, self.token_key))
@@ -66,6 +68,15 @@ class MercadoLibreOAuth:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS autobrillo_oauth_state (
+                    state_key TEXT PRIMARY KEY,
+                    state_encrypted BYTEA NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+                """
+            )
             conn.commit()
         return True
 
@@ -89,22 +100,80 @@ class MercadoLibreOAuth:
         with open(self.token_file, "wb") as f:
             f.write(encrypted)
 
+    def _save_state(self, state_data):
+        if self._db_enabled():
+            encrypted = self._fernet().encrypt(json.dumps(state_data).encode())
+            self._ensure_db()
+            with psycopg.connect(self._db_url()) as conn:
+                conn.execute(
+                    """
+                    INSERT INTO autobrillo_oauth_state (state_key, state_encrypted, updated_at)
+                    VALUES (%s, %s, NOW())
+                    ON CONFLICT (state_key) DO UPDATE SET
+                        state_encrypted = EXCLUDED.state_encrypted,
+                        updated_at = NOW()
+                    """,
+                    (self.STATE_DB_KEY, encrypted),
+                )
+                conn.commit()
+            return
+        with open(self.state_file, "w", encoding="utf-8") as f:
+            json.dump(state_data, f)
+
+    def _load_state(self):
+        if self._db_enabled():
+            try:
+                self._ensure_db()
+                with psycopg.connect(self._db_url()) as conn:
+                    row = conn.execute(
+                        "SELECT state_encrypted FROM autobrillo_oauth_state WHERE state_key = %s",
+                        (self.STATE_DB_KEY,),
+                    ).fetchone()
+                if row:
+                    return json.loads(self._fernet().decrypt(bytes(row[0])).decode())
+            except Exception:
+                pass
+        with open(self.state_file, encoding="utf-8") as f:
+            return json.load(f)
+
+    def _delete_state(self):
+        if self._db_enabled():
+            try:
+                self._ensure_db()
+                with psycopg.connect(self._db_url()) as conn:
+                    conn.execute(
+                        "DELETE FROM autobrillo_oauth_state WHERE state_key = %s",
+                        (self.STATE_DB_KEY,),
+                    )
+                    conn.commit()
+            except Exception:
+                pass
+        try:
+            os.remove(self.state_file)
+        except OSError:
+            pass
+
     def start(self):
         if not self.configured():
             raise RuntimeError("Configura ML_CLIENT_ID, ML_CLIENT_SECRET, ML_REDIRECT_URI y AUTOBRILLO_TOKEN_KEY")
-        verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
-        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+
         state = secrets.token_urlsafe(32)
-        with open(self.state_file, "w", encoding="utf-8") as f:
-            json.dump({"state": state, "verifier": verifier, "created_at": time.time()}, f)
+        state_data = {"state": state, "created_at": time.time()}
         params = {
             "response_type": "code",
             "client_id": self.client_id,
             "redirect_uri": self.redirect_uri,
             "state": state,
-            "code_challenge": challenge,
-            "code_challenge_method": "S256",
         }
+
+        if self.pkce_enabled:
+            verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
+            challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
+            state_data["verifier"] = verifier
+            params["code_challenge"] = challenge
+            params["code_challenge_method"] = "S256"
+
+        self._save_state(state_data)
         return self.AUTH_URL + "?" + urlencode(params)
 
     @staticmethod
@@ -123,21 +192,33 @@ class MercadoLibreOAuth:
     def exchange(self, code, state):
         if not self.configured():
             raise RuntimeError("OAuth no está configurado.")
-        with open(self.state_file, encoding="utf-8") as f:
-            saved = json.load(f)
-        if not secrets.compare_digest(state, saved.get("state", "")):
-            raise RuntimeError("State OAuth inválido.")
-        if time.time() - float(saved.get("created_at", 0)) > 600:
-            raise RuntimeError("State OAuth expirado.")
 
-        data = urlencode({
+        try:
+            saved = self._load_state()
+        except FileNotFoundError:
+            raise RuntimeError("No existe un estado OAuth activo. Inicia nuevamente la conexión desde AutoBrillo.") from None
+        except Exception as exc:
+            raise RuntimeError(f"No se pudo recuperar el estado OAuth: {self._safe_error_text(str(exc))}") from None
+
+        if not state or not secrets.compare_digest(state, saved.get("state", "")):
+            raise RuntimeError("State OAuth inválido. Inicia nuevamente la conexión desde AutoBrillo.")
+        if time.time() - float(saved.get("created_at", 0)) > 600:
+            raise RuntimeError("State OAuth expirado. Inicia nuevamente la conexión desde AutoBrillo.")
+
+        payload = {
             "grant_type": "authorization_code",
             "client_id": self.client_id,
             "client_secret": self.client_secret,
             "code": code,
             "redirect_uri": self.redirect_uri,
-            "code_verifier": saved["verifier"],
-        }).encode()
+        }
+        if self.pkce_enabled:
+            verifier = saved.get("verifier")
+            if not verifier:
+                raise RuntimeError("Falta el code_verifier de OAuth. Inicia nuevamente la conexión.")
+            payload["code_verifier"] = verifier
+
+        data = urlencode(payload).encode()
         req = Request(
             self.TOKEN_URL,
             data=data,
@@ -169,12 +250,11 @@ class MercadoLibreOAuth:
             raise RuntimeError(
                 f"Mercado Libre rechazó el intercambio (HTTP {exc.code}): {detail}"
             ) from None
+        except Exception as exc:
+            raise RuntimeError(f"No se pudo contactar a Mercado Libre: {self._safe_error_text(str(exc))}") from None
 
         self._save_token(token)
-        try:
-            os.remove(self.state_file)
-        except OSError:
-            pass
+        self._delete_state()
         return token
 
     def load_token(self):
