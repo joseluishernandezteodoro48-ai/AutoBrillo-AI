@@ -1,7 +1,7 @@
 import hmac
 import os
 from fastapi import Depends, FastAPI, Header, HTTPException
-from fastapi.responses import PlainTextResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 from pydantic import BaseModel, Field
 
 from autobrillo import Product, SalesAgent
@@ -35,8 +35,10 @@ def require_admin(x_admin_key: str | None = Header(default=None)):
 def persistence_status():
     return {'postgres_configured':oauth.database_configured(),'token_storage':'postgresql' if oauth.database_configured() else 'local_fallback'}
 
-@app.get('/', response_class=PlainTextResponse)
-def root(): return 'AutoBrillo AI API activa. Brillo + Tygo listos.'
+@app.get('/', response_class=HTMLResponse)
+def root():
+    return '''<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Brillo · AutoBrillo AI</title><style>body{margin:0;font-family:system-ui;background:#0b1020;color:#f4f7ff}main{max-width:900px;margin:auto;padding:28px}.card{background:#151d32;border:1px solid #293451;border-radius:18px;padding:20px;margin:14px 0}h1{margin-bottom:4px}small{color:#aab5cf}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}button{width:100%;padding:16px;border:0;border-radius:12px;background:#263454;color:white;font-size:16px;cursor:pointer}textarea{width:100%;box-sizing:border-box;min-height:90px;background:#0d1426;color:white;border:1px solid #34415f;border-radius:12px;padding:12px;font-size:16px}pre{white-space:pre-wrap;word-break:break-word;background:#0b1222;padding:14px;border-radius:12px}</style></head><body><main><h1>✨ Brillo</h1><small>AutoBrillo AI · Brillo + Tygo</small><div class="card"><h2>¿Qué hacemos?</h2><textarea id="cmd" placeholder="Ejemplo: consigue 5 productos y venderlos"></textarea><button onclick="send()">🚀 Ejecutar orden</button></div><div class="card"><h2>Acciones</h2><div class="grid"><button onclick="oauth()">🔗 Conectar Mercado Libre</button><button onclick="status()">🟢 Estado del sistema</button><button onclick="plan()">🧠 Plan de Tygo</button><button onclick="cycle()">⚙️ Ejecutar ciclo</button></div></div><div class="card"><h2>Resultado</h2><pre id="out">Brillo está listo. Escribe una orden.</pre></div></main><script>const out=document.getElementById('out');function show(x){out.textContent=typeof x==='string'?x:JSON.stringify(x,null,2)}async function call(url,opt){try{let r=await fetch(url,opt);let t=await r.text();try{show(JSON.parse(t))}catch{show(t)}}catch(e){show('Error de conexión: '+e)}}function oauth(){location.href='/oauth/mercadolibre/start'}function status(){call('/api/status')}function plan(){call('/api/plan?limit=5')}function cycle(){call('/api/cycle?limit=5',{method:'POST'})}function send(){let c=document.getElementById('cmd').value.trim();if(!c)return show('Escribe una orden.');call('/api/brillo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:c})})}</script></body></html>'''
+
 @app.get('/health')
 def health(): return {'status':'ok','service':'AutoBrillo AI','version':'v6.3','brain_ready':agent.brain.ready,'brillo_ready':True,'mercadolibre_configured':oauth.configured(),**persistence_status()}
 @app.get('/api/status')
