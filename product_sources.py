@@ -12,7 +12,7 @@ class ProductSourceError(RuntimeError):
 
 
 class MercadoLibreSource:
-    """Descubrimiento de candidatos mediante el catálogo autenticado de Mercado Libre."""
+    """Descubrimiento de candidatos desde el marketplace público de Mercado Libre."""
 
     def __init__(self, api: MercadoLibreAPI | None = None):
         self.api = api or MercadoLibreAPI()
@@ -29,10 +29,14 @@ class MercadoLibreSource:
 
         products: List[Dict[str, Any]] = []
         for item in data.get("results", []):
-            winner = item.get("buy_box_winner") or {}
-            price = float(winner.get("price") or 0)
+            # /sites/{site}/search devuelve publicaciones: title/price/permalink.
+            # No confundir estos datos con costo de proveedor.
+            name = str(item.get("title") or item.get("name") or "").strip()
+            price = float(item.get("price") or 0)
+            if not name or price <= 0:
+                continue
             products.append({
-                "name": str(item.get("name") or item.get("family_name") or "").strip(),
+                "name": name,
                 "price": price,
                 "cost": 0.0,
                 "commission": 0.0,
@@ -42,10 +46,10 @@ class MercadoLibreSource:
                 "source": "mercadolibre",
                 "source_id": item.get("id", ""),
                 "cost_known": False,
-                "marketplace_price_known": price > 0,
-                "currency_id": winner.get("currency_id", "MXN"),
-                "buy_box_item_id": winner.get("item_id", ""),
-                "seller_id": winner.get("seller_id", ""),
+                "marketplace_price_known": True,
+                "currency_id": item.get("currency_id", "MXN"),
+                "buy_box_item_id": item.get("id", ""),
+                "seller_id": item.get("seller", {}).get("id", "") if isinstance(item.get("seller"), dict) else "",
             })
         return products
 
