@@ -12,6 +12,20 @@ from typing import Any, Dict, Iterable, List, Optional
 MODEL_PATH = Path(os.environ.get("AUTOBRILLO_MODEL", "model_data.json"))
 TOKEN_RE = re.compile(r"[\wáéíóúüñ]+", re.IGNORECASE)
 
+BASELINE_EXAMPLES = [
+    {"text": "consigue productos", "label": "source"},
+    {"text": "busca productos para vender", "label": "source"},
+    {"text": "encuentra productos", "label": "source"},
+    {"text": "investiga productos", "label": "research"},
+    {"text": "analiza un producto", "label": "analyze"},
+    {"text": "compara productos y margen", "label": "analyze"},
+    {"text": "publica el producto", "label": "publish"},
+    {"text": "vende el producto", "label": "sell"},
+    {"text": "quiero vender", "label": "sell"},
+    {"text": "aprende de los resultados", "label": "learn"},
+    {"text": "mejora la estrategia", "label": "learn"},
+]
+
 class AutoBrilloBrain:
     def __init__(self, path: Optional[str] = None):
         self.path = Path(path or MODEL_PATH)
@@ -19,6 +33,10 @@ class AutoBrilloBrain:
         self.labels = Counter(); self.words = defaultdict(Counter); self.total_words = Counter()
         self.outcomes: List[Dict[str, Any]] = []
         self._load()
+        if not self.ready:
+            self.examples = list(BASELINE_EXAMPLES)
+            self._rebuild()
+            self._save()
 
     @property
     def ready(self) -> bool:
