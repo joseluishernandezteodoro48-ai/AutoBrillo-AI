@@ -24,7 +24,9 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall -q .
 
-      - name: Smoke test imports
+      - name: Smoke test deployed application entrypoint
         env:
           AUTOBRILLO_MODEL: /tmp/model_data.json
-        run: python -c "from app import app; print(app.title, app.version)"
+          AUTOBRILLO_DRY_RUN: "true"
+          AUTOBRILLO_KILL_SWITCH: "false"
+        run: python -c "from main import app; print(app.title, app.version)"
