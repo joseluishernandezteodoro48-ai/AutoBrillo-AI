@@ -42,6 +42,8 @@ class MercadoLibreAPI:
         if not response.ok:
             detail = data.get("message") or data.get("error_description") or data.get("error") or "solicitud rechazada"
             code = data.get("code") or data.get("error") or ""
+            if response.status_code == 401:
+                raise RuntimeError(f"Mercado Libre 401 Unauthorized: {detail} ({code or 'UNAUTHORIZED'}). Vuelve a autorizar la cuenta.")
             if response.status_code == 403:
                 raise RuntimeError(f"Mercado Libre 403 Forbidden: {detail} ({code or 'FORBIDDEN'}). Revisa scopes, estado de la app, usuario propietario y restricciones de Mercado Libre.")
             raise RuntimeError(f"Mercado Libre API {response.status_code}: {detail}{f' ({code})' if code else ''}")
@@ -55,10 +57,13 @@ class MercadoLibreAPI:
         if not query:
             raise ValueError("La búsqueda no puede estar vacía.")
         limit = max(1, min(int(limit), 50))
-        return self.request("GET", f"/sites/{self.site}/search", authenticated=True, params={"q": query, "limit": limit})
+        # La búsqueda del catálogo de publicaciones es un recurso público de descubrimiento.
+        # No debe depender de un token de vendedor para que el sourcing funcione.
+        return self.request("GET", f"/sites/{self.site}/search", authenticated=False, params={"q": query, "limit": limit})
 
     def item(self, item_id: str) -> dict[str, Any]:
         item_id = item_id.strip()
         if not item_id:
             raise ValueError("Falta el ID del producto.")
-        return self.request("GET", f"/items/{item_id}", authenticated=True)
+        # La consulta de una publicación también se puede realizar como lectura pública.
+        return self.request("GET", f"/items/{item_id}", authenticated=False)
