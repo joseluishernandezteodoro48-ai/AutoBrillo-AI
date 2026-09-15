@@ -1,4 +1,4 @@
-"""Brillo v6.1: interfaz de órdenes y orquestación de AutoBrillo AI."""
+"""Brillo v6.2: interfaz de órdenes y orquestación de AutoBrillo AI."""
 from __future__ import annotations
 
 import argparse
@@ -10,6 +10,7 @@ from autobrillo import Product, SalesAgent
 from product_sources import ProductSourceError, search_products
 from supplier_sources import SupplierSourceError, search_suppliers
 from sourcing import compare_product_with_suppliers
+from tygo_search import TygoSearchDecision
 
 
 class Brillo:
@@ -19,20 +20,45 @@ class Brillo:
 
     def __init__(self, agent: SalesAgent | None = None):
         self.agent = agent or SalesAgent()
+        self.tygo_search = TygoSearchDecision()
 
     def understand(self, command: str) -> Dict[str, Any]:
         text = str(command).strip()
         normalized = text.casefold()
         count_match = self.PRODUCT_COUNT.search(normalized)
-        count = int(count_match.group(1)) if count_match else 5
+        explicit_count = int(count_match.group(1)) if count_match else None
         wants_sell = any(x in normalized for x in ("vender", "venta", "vende", "sell"))
         wants_find = any(x in normalized for x in ("consigue", "buscar", "busca", "encontrar", "productos"))
         wants_publish = any(x in normalized for x in ("publica", "publicar", "anuncia", "publicación"))
         intent = "source_and_sell" if wants_find and wants_sell else "sell" if wants_sell else "source" if wants_find else "general"
-        return {"raw": text, "intent": intent, "product_count": max(1, min(count, 50)), "publish_requested": wants_publish}
 
-    def source(self, query: str, count: int = 5) -> Dict[str, Any]:
+        if explicit_count is not None:
+            product_count = max(1, min(explicit_count, 50))
+            count_source = "user"
+            count_reason = "cantidad indicada explícitamente por el usuario"
+        elif wants_find:
+            decision = self.tygo_search.choose_count(self.agent, text)
+            product_count = decision["count"]
+            count_source = "tygo"
+            count_reason = decision["reason"]
+        else:
+            product_count = None
+            count_source = "not_applicable"
+            count_reason = "la orden no requiere sourcing"
+
+        return {
+            "raw": text,
+            "intent": intent,
+            "product_count": product_count,
+            "product_count_source": count_source,
+            "product_count_reason": count_reason,
+            "publish_requested": wants_publish,
+        }
+
+    def source(self, query: str, count: int) -> Dict[str, Any]:
         """Busca candidatos de venta y los incorpora al catálogo sin inventar costos."""
+        if count < 1:
+            raise ValueError("count debe ser mayor que cero")
         candidates = search_products(query, count)
         added, skipped = [], []
         for item in candidates:
@@ -48,10 +74,10 @@ class Brillo:
                 added.append(item["name"])
             except ValueError:
                 skipped.append(item["name"])
-        self.agent.memory.remember("product_source", {"query": query, "found": len(candidates), "added": len(added)}, "completed")
-        return {"found": len(candidates), "added": added, "skipped": skipped, "source": "mercadolibre", "cost_policy": "no asumir precio de venta como costo del proveedor"}
+        self.agent.memory.remember("product_source", {"query": query, "found": len(candidates), "added": len(added), "count": count, "decision_source": "tygo_or_user"}, "completed")
+        return {"found": len(candidates), "added": added, "skipped": skipped, "requested": count, "source": "mercadolibre", "cost_policy": "no asumir precio de venta como costo del proveedor"}
 
-    def compare_suppliers(self, query: str, count: int = 5) -> Dict[str, Any]:
+    def compare_suppliers(self, query: str, count: int) -> Dict[str, Any]:
         """Busca proveedores configurados y compara sus costos con candidatos del marketplace."""
         products = search_products(query, count)
         suppliers = search_suppliers(query, max(count * 3, 10))
@@ -62,6 +88,7 @@ class Brillo:
         return {
             "products_found": len(products),
             "suppliers_found": len(suppliers),
+            "requested": count,
             "comparisons": comparisons[: max(1, count * 3)],
             "ready": [x for x in comparisons if x["cost_known"] and x["projected_profit"] > 0][:count],
             "needs_verification": [x for x in comparisons if not x["cost_known"]][:count],
@@ -72,12 +99,13 @@ class Brillo:
         if intent["intent"] in ("source_and_sell", "source"):
             query = re.sub(r"\b\d+\b", "", intent["raw"], count=1).strip()
             query = re.sub(r"\b(consigue|busca|buscar|encontrar|productos|y|vende|vender|venta)\b", " ", query, flags=re.I).strip() or "productos populares"
+            count = int(intent["product_count"])
             try:
-                source_result = self.source(query, intent["product_count"])
-                supplier_result = self.compare_suppliers(query, intent["product_count"])
+                source_result = self.source(query, count)
+                supplier_result = self.compare_suppliers(query, count)
             except (ProductSourceError, SupplierSourceError) as exc:
                 return {"ok": False, "assistant": "Brillo", "brain": "Tygo/SalesAgent", "intent": intent, "error": str(exc)}
-            plan = self.agent.plan(intent["product_count"])
+            plan = self.agent.plan(count)
             ready = [x["product"] for x in plan if x.get("ready_to_sell")]
             research = [x["product"] for x in plan if x.get("action") == "research_cost"]
             return {"ok": True, "assistant": "Brillo", "brain": "Tygo/SalesAgent", "intent": intent,
@@ -86,7 +114,7 @@ class Brillo:
                     "next": "usar solo costos de proveedor verificados; después preparar publicación/venta con conectores oficiales"}
 
         if intent["intent"] == "sell":
-            plan = self.agent.plan(intent["product_count"])
+            plan = self.agent.plan(int(intent["product_count"] or 10))
             return {"ok": True, "assistant": "Brillo", "brain": "Tygo/SalesAgent", "intent": intent,
                     "status": "planned", "plan": plan,
                     "next": "conectar canal de venta oficial", "financial_actions": "requieren autorización/conector oficial"}
@@ -96,7 +124,7 @@ class Brillo:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Brillo v6.1 - interfaz de AutoBrillo AI")
+    parser = argparse.ArgumentParser(description="Brillo v6.2 - interfaz de AutoBrillo AI")
     parser.add_argument("command", nargs="+", help="Orden para Brillo")
     args = parser.parse_args()
     print(json.dumps(Brillo().respond(" ".join(args.command)), ensure_ascii=False, indent=2))
