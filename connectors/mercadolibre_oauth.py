@@ -41,7 +41,19 @@ class MercadoLibreOAuth:
         return all((self.client_id, self.client_secret, self.redirect_uri, self.token_key))
 
     def database_configured(self):
-        return bool(self.database_url and "${" not in self.database_url and psycopg)
+        # Render puede inyectar una referencia de Blueprint resuelta en runtime.
+        # Nunca consideramos una referencia literal ({{...}} / ${{...}}) como URL válida.
+        return bool(self.database_url and "${" not in self.database_url and "{{" not in self.database_url and psycopg)
+
+    def database_health(self):
+        if not self.database_configured():
+            return {"configured": False, "connected": False, "error": "DATABASE_URL no está disponible como una URL resuelta."}
+        try:
+            with psycopg.connect(self._db_url(), connect_timeout=5) as conn:
+                conn.execute("SELECT 1")
+            return {"configured": True, "connected": True, "error": None}
+        except Exception as exc:
+            return {"configured": True, "connected": False, "error": str(exc)[:300]}
 
     def _db_url(self):
         if not self.database_configured():
