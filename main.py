@@ -17,6 +17,11 @@ app = FastAPI(title='AutoBrillo AI API', version='7.3')
 oauth = MercadoLibreOAuth()
 ml_api = MercadoLibreAPI(oauth)
 agent = SalesAgent()
+# Permisos internos necesarios para descubrir, catalogar y medir productos.
+# No habilita publicaciones, compras, cobros ni transferencias externas.
+for _permission in ('products', 'analytics'):
+    if not agent.memory.allowed(_permission):
+        agent.memory.set_permission(_permission, True)
 brillo = Brillo(agent)
 autonomy = AutonomousEngine(brillo, agent)
 goals = GoalAgent(agent.memory)
@@ -74,7 +79,7 @@ def root():
 @app.get('/health')
 def health(): return {'status':'ok','service':'AutoBrillo AI','version':'v7.3','brain_ready':agent.brain.ready,'brillo_ready':True,'mercadolibre_configured':oauth.configured(),**persistence_status()}
 @app.get('/api/status', dependencies=[Depends(rate_limit)])
-def status(): return {'service':'AutoBrillo AI','version':'v7.2','brain_ready':agent.brain.ready,'products':len(agent.catalog.products),'active_goals':len(goals.list_active()),'dry_run':agent.dry_run,'kill_switch':agent.kill,'brillo':'ready','tygo':'ready','mercadolibre_configured':oauth.configured(),**persistence_status()}
+def status(): return {'service':'AutoBrillo AI','version':'v7.3','brain_ready':agent.brain.ready,'products':len(agent.catalog.products),'active_goals':len(goals.list_active()),'dry_run':agent.dry_run,'kill_switch':agent.kill,'brillo':'ready','tygo':'ready','mercadolibre_configured':oauth.configured(),**persistence_status()}
 
 @app.post('/api/autonomy', dependencies=[Depends(rate_limit)])
 def run_autonomy(request: AutonomyRequest):
