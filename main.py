@@ -92,7 +92,7 @@ def mercadolibre_search(q: str, limit: int=5):
     if not 1 <= limit <= 50: raise HTTPException(400,'limit debe estar entre 1 y 50.')
     try: return ml_api.search(q,limit)
     except Exception as exc: raise HTTPException(400,f'No se pudo buscar en Mercado Libre: {redact(exc)}') from None
-@app.get('/api/mercadolibre/item/{item_id}')
+@app.get('/api/mercadolibre/item/{item_id}', dependencies=[Depends(rate_limit)])
 def mercadolibre_item(item_id: str):
     if len(item_id) > 100 or any(ch in item_id for ch in '<>"\''): raise HTTPException(400,'Identificador de producto inválido.')
     try: return ml_api.item(item_id)
