@@ -13,7 +13,7 @@ from connectors.mercadolibre_api import MercadoLibreAPI
 from goal_agent import GoalAgent
 from security import RateLimiter, constant_time_equal, redact
 
-app = FastAPI(title='AutoBrillo AI API', version='7.2')
+app = FastAPI(title='AutoBrillo AI API', version='7.3')
 oauth = MercadoLibreOAuth()
 ml_api = MercadoLibreAPI(oauth)
 agent = SalesAgent()
@@ -72,7 +72,7 @@ def root():
     return '''<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Brillo · AutoBrillo AI</title><style>body{margin:0;font-family:system-ui;background:#0b1020;color:#f4f7ff}main{max-width:900px;margin:auto;padding:28px}.card{background:#151d32;border:1px solid #293451;border-radius:18px;padding:20px;margin:14px 0}h1{margin-bottom:4px}small{color:#aab5cf}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}button{width:100%;padding:16px;border:0;border-radius:12px;background:#263454;color:white;font-size:16px;cursor:pointer}textarea{width:100%;box-sizing:border-box;min-height:90px;background:#0d1426;color:white;border:1px solid #34415f;border-radius:12px;padding:12px;font-size:16px}pre{white-space:pre-wrap;word-break:break-word;background:#0b1222;padding:14px;border-radius:12px}</style></head><body><main><h1>✨ Brillo</h1><small>AutoBrillo AI · Brillo + Tygo</small><div class="card"><h2>¿Qué hacemos?</h2><textarea id="cmd" placeholder="Ejemplo: productos"></textarea><button onclick="send()">🚀 Ejecutar orden</button></div><div class="card"><h2>Acciones</h2><div class="grid"><button onclick="autonomous()">🧠 Ejecutar autonomía</button><button onclick="oauth()">🔗 Conectar Mercado Libre</button><button onclick="status()">🟢 Estado del sistema</button><button onclick="plan()">🧠 Plan de Tygo</button></div><p><small>Tygo puede explorar productos en modo autónomo. Las publicaciones, compras, cobros y transferencias siguen bloqueadas hasta contar con conectores y permisos oficiales.</small></p></div><div class="card"><h2>Resultado</h2><pre id="out">Brillo está listo. Escribe una orden.</pre></div></main><script>const out=document.getElementById('out');function show(x){out.textContent=typeof x==='string'?x:JSON.stringify(x,null,2)}async function call(url,opt){try{let r=await fetch(url,opt);let t=await r.text();try{show(JSON.parse(t))}catch{show(t)}}catch(e){show('Error de conexión: '+e)}}function oauth(){location.href='/oauth/mercadolibre/start'}function status(){call('/api/status')}function plan(){call('/api/plan')}function autonomous(){show('Tygo está ejecutando exploración autónoma...');call('/api/autonomy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:'productos'})})}function send(){let c=document.getElementById('cmd').value.trim();if(!c)return show('Escribe una orden.');show('Brillo + Tygo están procesando la orden...');call('/api/brillo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:c})})}</script></body></html>'''
 
 @app.get('/health')
-def health(): return {'status':'ok','service':'AutoBrillo AI','version':'v7.2','brain_ready':agent.brain.ready,'brillo_ready':True,'mercadolibre_configured':oauth.configured(),**persistence_status()}
+def health(): return {'status':'ok','service':'AutoBrillo AI','version':'v7.3','brain_ready':agent.brain.ready,'brillo_ready':True,'mercadolibre_configured':oauth.configured(),**persistence_status()}
 @app.get('/api/status', dependencies=[Depends(rate_limit)])
 def status(): return {'service':'AutoBrillo AI','version':'v7.2','brain_ready':agent.brain.ready,'products':len(agent.catalog.products),'active_goals':len(goals.list_active()),'dry_run':agent.dry_run,'kill_switch':agent.kill,'brillo':'ready','tygo':'ready','mercadolibre_configured':oauth.configured(),**persistence_status()}
 
@@ -101,13 +101,10 @@ def mercadolibre_item(item_id: str):
 @app.post('/api/brillo', dependencies=[Depends(rate_limit)])
 def brillo_command(request: BrilloRequest):
     try:
-        result = brillo.respond(request.command)
-        if result.get('ok') and result.get('intent', {}).get('intent') in ('source', 'source_and_sell'):
-            count = int(result['intent']['product_count'])
-            result['execution'] = agent.run_cycle(count)
-            result['status'] = 'executed_safe_cycle'
-            result['next'] = 'verificar costos de proveedor; después preparar publicación/venta mediante conectores oficiales autorizados'
-        return result
+        intent = brillo.understand(request.command)
+        if intent.get('intent') in ('source', 'source_and_sell') and intent.get('product_count_source') != 'user':
+            return autonomy.run(request.command, None)
+        return brillo.respond(request.command)
     except Exception as exc: raise HTTPException(400,f'Brillo no pudo procesar la orden: {redact(exc)}') from None
 
 @app.get('/api/plan', dependencies=[Depends(rate_limit)])
