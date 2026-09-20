@@ -7,16 +7,18 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from autobrillo import Product, SalesAgent
 from brillo import Brillo
+from autonomy import AutonomousEngine
 from connectors.mercadolibre_oauth import MercadoLibreOAuth
 from connectors.mercadolibre_api import MercadoLibreAPI
 from goal_agent import GoalAgent
 from security import RateLimiter, constant_time_equal, redact
 
-app = FastAPI(title='AutoBrillo AI API', version='7.1')
+app = FastAPI(title='AutoBrillo AI API', version='7.2')
 oauth = MercadoLibreOAuth()
 ml_api = MercadoLibreAPI(oauth)
 agent = SalesAgent()
 brillo = Brillo(agent)
+autonomy = AutonomousEngine(brillo, agent)
 goals = GoalAgent(agent.memory)
 api_limiter = RateLimiter(limit=int(os.getenv('AUTOBRILLO_RATE_LIMIT','60')), window_seconds=60)
 
@@ -38,8 +40,13 @@ class ProductRequest(BaseModel):
     name: str = Field(min_length=1, max_length=300); price: float = Field(gt=0); cost: float = Field(default=0, ge=0); commission: float = Field(default=0, ge=0); shipping_cost: float = Field(default=0, ge=0); fixed_fee: float = Field(default=0, ge=0); tax_rate: float = Field(default=0, ge=0, le=1); url: str = ''
 class PermissionRequest(BaseModel):
     name: str = Field(min_length=1, max_length=50); enabled: bool = True
-class GoalRequest(BaseModel): text: str = Field(min_length=3, max_length=1000)
-class BrilloRequest(BaseModel): command: str = Field(min_length=1, max_length=1000)
+class GoalRequest(BaseModel):
+    text: str = Field(min_length=3, max_length=1000)
+class BrilloRequest(BaseModel):
+    command: str = Field(min_length=1, max_length=1000)
+class AutonomyRequest(BaseModel):
+    query: str = Field(default='productos', min_length=1, max_length=300)
+    target: int | None = Field(default=None, ge=1, le=500)
 
 def rate_limit(request: Request):
     forwarded = request.headers.get('x-forwarded-for','').split(',')[0].strip()
@@ -62,12 +69,19 @@ def persistence_status():
 
 @app.get('/', response_class=HTMLResponse)
 def root():
-    return '''<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Brillo · AutoBrillo AI</title><style>body{margin:0;font-family:system-ui;background:#0b1020;color:#f4f7ff}main{max-width:900px;margin:auto;padding:28px}.card{background:#151d32;border:1px solid #293451;border-radius:18px;padding:20px;margin:14px 0}h1{margin-bottom:4px}small{color:#aab5cf}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}button{width:100%;padding:16px;border:0;border-radius:12px;background:#263454;color:white;font-size:16px;cursor:pointer}textarea{width:100%;box-sizing:border-box;min-height:90px;background:#0d1426;color:white;border:1px solid #34415f;border-radius:12px;padding:12px;font-size:16px}pre{white-space:pre-wrap;word-break:break-word;background:#0b1222;padding:14px;border-radius:12px}</style></head><body><main><h1>✨ Brillo</h1><small>AutoBrillo AI · Brillo + Tygo</small><div class="card"><h2>¿Qué hacemos?</h2><textarea id="cmd" placeholder="Ejemplo: productos"></textarea><button onclick="send()">🚀 Ejecutar orden</button></div><div class="card"><h2>Acciones</h2><div class="grid"><button onclick="oauth()">🔗 Conectar Mercado Libre</button><button onclick="status()">🟢 Estado del sistema</button><button onclick="plan()">🧠 Plan de Tygo</button></div><p><small>El ciclo seguro se ejecuta automáticamente al dar una orden. Las publicaciones, compras, cobros y transferencias siguen bloqueadas hasta contar con conectores y permisos oficiales.</small></p></div><div class="card"><h2>Resultado</h2><pre id="out">Brillo está listo. Escribe una orden.</pre></div></main><script>const out=document.getElementById('out');function show(x){out.textContent=typeof x==='string'?x:JSON.stringify(x,null,2)}async function call(url,opt){try{let r=await fetch(url,opt);let t=await r.text();try{show(JSON.parse(t))}catch{show(t)}}catch(e){show('Error de conexión: '+e)}}function oauth(){location.href='/oauth/mercadolibre/start'}function status(){call('/api/status')}function plan(){call('/api/plan')}function send(){let c=document.getElementById('cmd').value.trim();if(!c)return show('Escribe una orden.');show('Brillo + Tygo están procesando la orden...');call('/api/brillo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:c})})}</script></body></html>'''
+    return '''<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Brillo · AutoBrillo AI</title><style>body{margin:0;font-family:system-ui;background:#0b1020;color:#f4f7ff}main{max-width:900px;margin:auto;padding:28px}.card{background:#151d32;border:1px solid #293451;border-radius:18px;padding:20px;margin:14px 0}h1{margin-bottom:4px}small{color:#aab5cf}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}button{width:100%;padding:16px;border:0;border-radius:12px;background:#263454;color:white;font-size:16px;cursor:pointer}textarea{width:100%;box-sizing:border-box;min-height:90px;background:#0d1426;color:white;border:1px solid #34415f;border-radius:12px;padding:12px;font-size:16px}pre{white-space:pre-wrap;word-break:break-word;background:#0b1222;padding:14px;border-radius:12px}</style></head><body><main><h1>✨ Brillo</h1><small>AutoBrillo AI · Brillo + Tygo</small><div class="card"><h2>¿Qué hacemos?</h2><textarea id="cmd" placeholder="Ejemplo: productos"></textarea><button onclick="send()">🚀 Ejecutar orden</button></div><div class="card"><h2>Acciones</h2><div class="grid"><button onclick="autonomous()">🧠 Ejecutar autonomía</button><button onclick="oauth()">🔗 Conectar Mercado Libre</button><button onclick="status()">🟢 Estado del sistema</button><button onclick="plan()">🧠 Plan de Tygo</button></div><p><small>Tygo puede explorar productos en modo autónomo. Las publicaciones, compras, cobros y transferencias siguen bloqueadas hasta contar con conectores y permisos oficiales.</small></p></div><div class="card"><h2>Resultado</h2><pre id="out">Brillo está listo. Escribe una orden.</pre></div></main><script>const out=document.getElementById('out');function show(x){out.textContent=typeof x==='string'?x:JSON.stringify(x,null,2)}async function call(url,opt){try{let r=await fetch(url,opt);let t=await r.text();try{show(JSON.parse(t))}catch{show(t)}}catch(e){show('Error de conexión: '+e)}}function oauth(){location.href='/oauth/mercadolibre/start'}function status(){call('/api/status')}function plan(){call('/api/plan')}function autonomous(){show('Tygo está ejecutando exploración autónoma...');call('/api/autonomy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:'productos'})})}function send(){let c=document.getElementById('cmd').value.trim();if(!c)return show('Escribe una orden.');show('Brillo + Tygo están procesando la orden...');call('/api/brillo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:c})})}</script></body></html>'''
 
 @app.get('/health')
-def health(): return {'status':'ok','service':'AutoBrillo AI','version':'v7.1','brain_ready':agent.brain.ready,'brillo_ready':True,'mercadolibre_configured':oauth.configured(),**persistence_status()}
+def health(): return {'status':'ok','service':'AutoBrillo AI','version':'v7.2','brain_ready':agent.brain.ready,'brillo_ready':True,'mercadolibre_configured':oauth.configured(),**persistence_status()}
 @app.get('/api/status', dependencies=[Depends(rate_limit)])
-def status(): return {'service':'AutoBrillo AI','version':'v7.1','brain_ready':agent.brain.ready,'products':len(agent.catalog.products),'active_goals':len(goals.list_active()),'dry_run':agent.dry_run,'kill_switch':agent.kill,'brillo':'ready','tygo':'ready','mercadolibre_configured':oauth.configured(),**persistence_status()}
+def status(): return {'service':'AutoBrillo AI','version':'v7.2','brain_ready':agent.brain.ready,'products':len(agent.catalog.products),'active_goals':len(goals.list_active()),'dry_run':agent.dry_run,'kill_switch':agent.kill,'brillo':'ready','tygo':'ready','mercadolibre_configured':oauth.configured(),**persistence_status()}
+
+@app.post('/api/autonomy', dependencies=[Depends(rate_limit)])
+def run_autonomy(request: AutonomyRequest):
+    try:
+        return autonomy.run(request.query, request.target)
+    except Exception as exc:
+        raise HTTPException(400, f'Tygo no pudo ejecutar autonomía: {redact(exc)}') from None
 
 @app.get('/api/mercadolibre/me', dependencies=[Depends(require_admin), Depends(rate_limit)])
 def mercadolibre_me():
@@ -78,9 +92,9 @@ def mercadolibre_search(q: str, limit: int=5):
     if not 1 <= limit <= 50: raise HTTPException(400,'limit debe estar entre 1 y 50.')
     try: return ml_api.search(q,limit)
     except Exception as exc: raise HTTPException(400,f'No se pudo buscar en Mercado Libre: {redact(exc)}') from None
-@app.get('/api/mercadolibre/item/{item_id}', dependencies=[Depends(rate_limit)])
+@app.get('/api/mercadolibre/item/{item_id}')
 def mercadolibre_item(item_id: str):
-    if len(item_id) > 100 or any(ch in item_id for ch in '<>\"\''): raise HTTPException(400,'Identificador de producto inválido.')
+    if len(item_id) > 100 or any(ch in item_id for ch in '<>"\''): raise HTTPException(400,'Identificador de producto inválido.')
     try: return ml_api.item(item_id)
     except Exception as exc: raise HTTPException(400,f'No se pudo consultar el producto: {redact(exc)}') from None
 
