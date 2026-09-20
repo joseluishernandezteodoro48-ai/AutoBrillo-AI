@@ -33,6 +33,9 @@ class MercadoLibreOAuth:
         self.database_url = os.getenv("DATABASE_URL", "")
         self.site = os.getenv("ML_SITE", "MLM").strip().upper() or "MLM"
         self.pkce_enabled = os.getenv("ML_PKCE_ENABLED", "true").strip().lower() in {"1", "true", "yes", "on"}
+        # Solicita los permisos oficiales que Mercado Libre admite para OAuth.
+        # La concesión efectiva sigue dependiendo de la configuración de la aplicación y del consentimiento del usuario.
+        self.oauth_scope = os.getenv("ML_OAUTH_SCOPE", "read write offline_access").strip() or "read offline_access"
 
     def configured(self):
         return all((self.client_id, self.client_secret, self.redirect_uri, self.token_key))
@@ -178,7 +181,7 @@ class MercadoLibreOAuth:
             raise RuntimeError("Configura ML_CLIENT_ID, ML_CLIENT_SECRET, ML_REDIRECT_URI y AUTOBRILLO_TOKEN_KEY")
         state = secrets.token_urlsafe(32)
         state_data = {"state": state, "created_at": time.time()}
-        params = {"response_type":"code","client_id":self.client_id,"redirect_uri":self.redirect_uri,"state":state}
+        params = {"response_type":"code","client_id":self.client_id,"redirect_uri":self.redirect_uri,"state":state,"scope":self.oauth_scope}
         if self.pkce_enabled:
             verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
             challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
