@@ -70,7 +70,8 @@ def require_webhook_key(x_autobrillo_webhook_key: str | None = Header(default=No
     if not constant_time_equal(x_autobrillo_webhook_key, expected): raise HTTPException(401,'Webhook no autorizado.')
 
 def persistence_status():
-    return {'postgres_configured':oauth.database_configured(),'token_storage':'postgresql' if oauth.database_configured() else 'local_fallback'}
+    db=oauth.database_health()
+    return {'postgres_configured':db['configured'],'postgres_connected':db['connected'],'postgres_error':db['error'],'token_storage':'postgresql' if db['connected'] else 'local_fallback'}
 
 @app.get('/', response_class=HTMLResponse)
 def root():
