@@ -18,10 +18,18 @@ services:
         value: "60"
       - key: AUTOBRILLO_MODEL
         value: /tmp/model_data.json
+      - key: AUTOBRILLO_SUPPLIER_FEED
+        value: suppliers.json
+      - key: AUTOBRILLO_PRODUCT_SOURCE
+        value: mercadolibre
       - key: ML_SITE
         value: MLM
       - key: ML_PKCE_ENABLED
         value: "true"
+      # Categoría por defecto (cámbiala por una real de tu cuenta / nicho)
+      # Ejemplo orientativo MLM: MLM1055 = Celulares y Teléfonos
+      - key: ML_DEFAULT_CATEGORY_ID
+        value: ""
       - key: ML_CLIENT_ID
         sync: false
       - key: ML_CLIENT_SECRET
@@ -43,4 +51,4 @@ databases:
   - name: autobrillo-ai-db
     plan: free
     region: oregon
-    postgresMajorVersion: 18
+    postgresMajorVersion: 16

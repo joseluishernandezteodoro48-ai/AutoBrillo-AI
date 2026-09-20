@@ -65,12 +65,19 @@ class JsonSupplierSource:
 
     def search(self, query: str, limit: int = 20) -> List[SupplierCandidate]:
         terms = {x for x in query.casefold().split() if len(x) >= 3}
+        # Palabras genéricas no filtran: devolver catálogo completo
+        generic = {"productos", "producto", "items", "item", "todo", "todos", "catalogo", "catálogo"}
+        terms -= generic
         rows = self._load()
         scored: List[tuple[int, Dict[str, Any]]] = []
         for row in rows:
             name = str(row.get("name", row.get("title", ""))).strip()
             haystack = name.casefold()
-            score = sum(1 for term in terms if term in haystack)
+            if not terms:
+                # Sin términos específicos: incluir todos los verificados
+                score = 1 if bool(row.get("verified", True)) else 0
+            else:
+                score = sum(1 for term in terms if term in haystack)
             if score:
                 scored.append((score, row))
         scored.sort(key=lambda item: item[0], reverse=True)

@@ -8,3 +8,7 @@ ml_tokens.enc
 ml_oauth_state.json
 .venv/
 venv/
+autobrillo.db
+catalog.json
+sites/
+*.enc

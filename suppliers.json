@@ -1,0 +1,74 @@
+[
+  {
+    "name": "Auriculares Bluetooth TWS Inalámbricos",
+    "cost": 89.50,
+    "shipping_cost": 28.00,
+    "supplier_name": "Proveedor Demo MX",
+    "url": "https://example-supplier.com/auriculares-tws",
+    "verified": true,
+    "available": true,
+    "currency": "MXN",
+    "source": "configured_feed",
+    "source_id": "SUP-001"
+  },
+  {
+    "name": "Cargador Rápido USB-C 65W GaN",
+    "cost": 145.00,
+    "shipping_cost": 32.00,
+    "supplier_name": "Proveedor Demo MX",
+    "url": "https://example-supplier.com/cargador-65w",
+    "verified": true,
+    "available": true,
+    "currency": "MXN",
+    "source": "configured_feed",
+    "source_id": "SUP-002"
+  },
+  {
+    "name": "Funda Silicona iPhone 15",
+    "cost": 22.00,
+    "shipping_cost": 18.00,
+    "supplier_name": "Proveedor Demo MX",
+    "url": "https://example-supplier.com/funda-iphone15",
+    "verified": true,
+    "available": true,
+    "currency": "MXN",
+    "source": "configured_feed",
+    "source_id": "SUP-003"
+  },
+  {
+    "name": "Mouse Inalámbrico Ergonómico",
+    "cost": 68.00,
+    "shipping_cost": 25.00,
+    "supplier_name": "Proveedor Demo MX",
+    "url": "https://example-supplier.com/mouse-ergonomico",
+    "verified": true,
+    "available": true,
+    "currency": "MXN",
+    "source": "configured_feed",
+    "source_id": "SUP-004"
+  },
+  {
+    "name": "Lámpara LED Escritorio USB",
+    "cost": 55.00,
+    "shipping_cost": 30.00,
+    "supplier_name": "Proveedor Demo MX",
+    "url": "https://example-supplier.com/lampara-led",
+    "verified": true,
+    "available": true,
+    "currency": "MXN",
+    "source": "configured_feed",
+    "source_id": "SUP-005"
+  },
+  {
+    "name": "Producto sin costo verificado (ejemplo)",
+    "cost": 0,
+    "shipping_cost": 0,
+    "supplier_name": "Sin verificar",
+    "url": "",
+    "verified": false,
+    "available": false,
+    "currency": "MXN",
+    "source": "configured_feed",
+    "source_id": "SUP-000"
+  }
+]

@@ -9,13 +9,20 @@ from connectors.mercadolibre_oauth import MercadoLibreOAuth
 
 
 class MercadoLibreAPI:
+    """Cliente oficial de Mercado Libre.
+
+    - search / item: públicos (descubrimiento).
+    - me / orders / shipments / publish: requieren token y scopes correctos.
+    - Nunca publica ni modifica si el llamador no lo decide explícitamente.
+    """
+
     BASE_URL = "https://api.mercadolibre.com"
 
     def __init__(self, oauth: MercadoLibreOAuth | None = None):
         self.oauth = oauth or MercadoLibreOAuth()
         self.timeout = float(os.getenv("ML_API_TIMEOUT", "20"))
         self.site = os.getenv("ML_SITE", "MLM").strip().upper() or "MLM"
-        self.user_agent = os.getenv("ML_API_USER_AGENT", "AutoBrillo-AI/7.0")
+        self.user_agent = os.getenv("ML_API_USER_AGENT", "AutoBrillo-AI/7.3")
 
     def _token(self) -> str:
         token = self.oauth.access_token()
@@ -31,22 +38,49 @@ class MercadoLibreAPI:
             data = {"text": response.text[:1000]}
         return data if isinstance(data, dict) else {"data": data}
 
-    def request(self, method: str, path: str, *, authenticated: bool = True, **kwargs: Any) -> dict[str, Any]:
+    def request(
+        self,
+        method: str,
+        path: str,
+        *,
+        authenticated: bool = True,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
         headers = dict(kwargs.pop("headers", {}) or {})
         if authenticated:
             headers["Authorization"] = f"Bearer {self._token()}"
         headers.setdefault("Accept", "application/json")
         headers.setdefault("User-Agent", self.user_agent)
-        response = requests.request(method, f"{self.BASE_URL}{path}", headers=headers, timeout=self.timeout, **kwargs)
+        response = requests.request(
+            method,
+            f"{self.BASE_URL}{path}",
+            headers=headers,
+            timeout=self.timeout,
+            **kwargs,
+        )
         data = self._decode_response(response)
         if not response.ok:
-            detail = data.get("message") or data.get("error_description") or data.get("error") or "solicitud rechazada"
+            detail = (
+                data.get("message")
+                or data.get("error_description")
+                or data.get("error")
+                or "solicitud rechazada"
+            )
             code = data.get("code") or data.get("error") or ""
             if response.status_code == 401:
-                raise RuntimeError(f"Mercado Libre 401 Unauthorized: {detail} ({code or 'UNAUTHORIZED'}). Vuelve a autorizar la cuenta.")
+                raise RuntimeError(
+                    f"Mercado Libre 401 Unauthorized: {detail} ({code or 'UNAUTHORIZED'}). "
+                    "Vuelve a autorizar la cuenta."
+                )
             if response.status_code == 403:
-                raise RuntimeError(f"Mercado Libre 403 Forbidden: {detail} ({code or 'FORBIDDEN'}). Revisa scopes, estado de la app, usuario propietario y restricciones de Mercado Libre.")
-            raise RuntimeError(f"Mercado Libre API {response.status_code}: {detail}{f' ({code})' if code else ''}")
+                raise RuntimeError(
+                    f"Mercado Libre 403 Forbidden: {detail} ({code or 'FORBIDDEN'}). "
+                    "Revisa scopes, estado de la app, usuario propietario y restricciones de Mercado Libre."
+                )
+            raise RuntimeError(
+                f"Mercado Libre API {response.status_code}: {detail}"
+                f"{f' ({code})' if code else ''}"
+            )
         return data
 
     def me(self) -> dict[str, Any]:
@@ -57,13 +91,55 @@ class MercadoLibreAPI:
         if not query:
             raise ValueError("La búsqueda no puede estar vacía.")
         limit = max(1, min(int(limit), 50))
-        # La búsqueda del catálogo de publicaciones es un recurso público de descubrimiento.
-        # No debe depender de un token de vendedor para que el sourcing funcione.
-        return self.request("GET", f"/sites/{self.site}/search", authenticated=False, params={"q": query, "limit": limit})
+        return self.request(
+            "GET",
+            f"/sites/{self.site}/search",
+            authenticated=False,
+            params={"q": query, "limit": limit},
+        )
 
     def item(self, item_id: str) -> dict[str, Any]:
         item_id = item_id.strip()
         if not item_id:
             raise ValueError("Falta el ID del producto.")
-        # La consulta de una publicación también se puede realizar como lectura pública.
         return self.request("GET", f"/items/{item_id}", authenticated=False)
+
+    def orders(self, *, offset: int = 0, limit: int = 50) -> dict[str, Any]:
+        limit = max(1, min(int(limit), 50))
+        offset = max(0, int(offset))
+        return self.request(
+            "GET",
+            "/orders/search",
+            authenticated=True,
+            params={"seller": "me", "offset": offset, "limit": limit},
+        )
+
+    def order(self, order_id: str) -> dict[str, Any]:
+        order_id = str(order_id).strip()
+        if not order_id:
+            raise ValueError("order_id requerido")
+        return self.request("GET", f"/orders/{order_id}", authenticated=True)
+
+    def shipment(self, shipment_id: str) -> dict[str, Any]:
+        shipment_id = str(shipment_id).strip()
+        if not shipment_id:
+            raise ValueError("shipment_id requerido")
+        return self.request("GET", f"/shipments/{shipment_id}", authenticated=True)
+
+    def publish_item(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Publica un ítem. El llamador debe respetar dry_run y permisos."""
+        if not isinstance(payload, dict) or not payload:
+            raise ValueError("payload de publicación inválido")
+        required = ("title", "category_id", "price", "currency_id", "available_quantity")
+        missing = [k for k in required if k not in payload]
+        if missing:
+            raise ValueError(f"Faltan campos obligatorios para publicar: {', '.join(missing)}")
+        return self.request("POST", "/items", authenticated=True, json=payload)
+
+    def update_item(self, item_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        item_id = str(item_id).strip()
+        if not item_id:
+            raise ValueError("item_id requerido")
+        if not isinstance(payload, dict) or not payload:
+            raise ValueError("payload de actualización inválido")
+        return self.request("PUT", f"/items/{item_id}", authenticated=True, json=payload)
