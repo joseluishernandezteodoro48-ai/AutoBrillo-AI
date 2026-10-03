@@ -46,6 +46,7 @@ class MercadoLibreAPI:
         authenticated: bool = True,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        retried_auth = bool(kwargs.pop("_retried_auth", False))
         headers = dict(kwargs.pop("headers", {}) or {})
         if authenticated:
             headers["Authorization"] = f"Bearer {self._token()}"
@@ -67,15 +68,38 @@ class MercadoLibreAPI:
                 or "solicitud rechazada"
             )
             code = data.get("code") or data.get("error") or ""
-            if response.status_code == 401:
+            if response.status_code == 401 and authenticated and not retried_auth:
+                try:
+                    token_record = self.oauth.load_token()
+                    refresh_token = str(token_record.get("refresh_token") or "")
+                    if refresh_token:
+                        self.oauth.refresh(refresh_token)
+                        return self.request(
+                            method,
+                            path,
+                            authenticated=authenticated,
+                            _retried_auth=True,
+                            **kwargs,
+                        )
+                except Exception as refresh_exc:
+                    raise RuntimeError(
+                        "Mercado Libre 401 Unauthorized y la renovación automática falló: "
+                        + str(refresh_exc)
+                    ) from None
                 raise RuntimeError(
                     f"Mercado Libre 401 Unauthorized: {detail} ({code or 'UNAUTHORIZED'}). "
                     "Vuelve a autorizar la cuenta."
                 )
             if response.status_code == 403:
+                if code == "PA_UNAUTHORIZED_RESULT_FROM_POLICIES":
+                    raise RuntimeError(
+                        "Mercado Libre 403: el PolicyAgent rechazó la operación por permisos funcionales. "
+                        "Revisa en DevCenter los permisos de la aplicación y vuelve a autorizar la cuenta "
+                        "para obtener un grant con los scopes requeridos."
+                    )
                 raise RuntimeError(
                     f"Mercado Libre 403 Forbidden: {detail} ({code or 'FORBIDDEN'}). "
-                    "Revisa scopes, estado de la app, usuario propietario y restricciones de Mercado Libre."
+                    "Revisa scopes, permisos funcionales, estado de la app, usuario propietario e IP permitida."
                 )
             raise RuntimeError(
                 f"Mercado Libre API {response.status_code}: {detail}"
