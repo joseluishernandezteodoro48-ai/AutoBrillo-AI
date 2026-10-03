@@ -46,6 +46,7 @@ class MercadoLibreAPI:
         authenticated: bool = True,
         **kwargs: Any,
     ) -> dict[str, Any]:
+        retried_auth = bool(kwargs.pop("_retried_auth", False))
         headers = dict(kwargs.pop("headers", {}) or {})
         if authenticated:
             headers["Authorization"] = f"Bearer {self._token()}"
@@ -67,7 +68,7 @@ class MercadoLibreAPI:
                 or "solicitud rechazada"
             )
             code = data.get("code") or data.get("error") or ""
-            if response.status_code == 401 and authenticated and not kwargs.pop("_retried_auth", False):
+            if response.status_code == 401 and authenticated and not retried_auth:
                 try:
                     token_record = self.oauth.load_token()
                     refresh_token = str(token_record.get("refresh_token") or "")
