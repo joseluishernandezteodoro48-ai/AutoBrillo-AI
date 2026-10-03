@@ -172,13 +172,40 @@ def health():
     return {
         "status": "ok",
         "service": "AutoBrillo AI",
-        "version": "v7.3",
+        "version": "v7.4",
         "brain_ready": agent.brain.ready,
         "brillo_ready": True,
         "mercadolibre_configured": oauth.configured(),
         "mercadolibre_connected": bool(oauth.access_token()) if oauth.configured() else False,
         **persistence_status(),
     }
+
+
+@app.get("/api/mercadolibre/verify", dependencies=[Depends(rate_limit)])
+def mercadolibre_verify():
+    """Verificación segura de OAuth: nunca devuelve access/refresh tokens."""
+    configured = oauth.configured()
+    if not configured:
+        return {"configured": False, "authenticated": False, "reason": "OAuth no configurado."}
+    token = oauth.access_token()
+    if not token:
+        return {"configured": True, "authenticated": False, "reason": "No hay token almacenado."}
+    try:
+        me = ml_api.me()
+        return {
+            "configured": True,
+            "authenticated": True,
+            "user_id": me.get("id"),
+            "nickname": me.get("nickname"),
+            "site_id": me.get("site_id"),
+            "status": (me.get("status") or {}).get("site_status"),
+        }
+    except Exception as exc:
+        return {
+            "configured": True,
+            "authenticated": False,
+            "reason": redact(exc),
+        }
 
 
 @app.get("/api/status", dependencies=[Depends(rate_limit)])
