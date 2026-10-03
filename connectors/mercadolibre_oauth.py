@@ -121,8 +121,6 @@ class MercadoLibreOAuth:
             return access
         refresh = str(token.get("refresh_token") or "")
         if not refresh:
-            return access
-        if not refresh:
             raise RuntimeError("El access token de Mercado Libre expiró y no existe refresh_token. Vuelve a autorizar la cuenta.")
         try:
             refreshed = self.refresh(refresh)
