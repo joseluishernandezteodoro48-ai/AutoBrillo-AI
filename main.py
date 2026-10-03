@@ -146,6 +146,7 @@ pre{white-space:pre-wrap;word-break:break-word;background:#0b1222;padding:14px;b
 <button onclick="autonomous()">🧠 Ejecutar autonomía</button>
 <button onclick="oauth()">🔗 Conectar Mercado Libre</button>
 <button onclick="status()">🟢 Estado del sistema</button>
+<button onclick="verifyML()">🔐 Verificar Mercado Libre</button>
 <button onclick="plan()">🧠 Plan de Tygo</button>
 </div>
 <p><small>Tygo puede explorar productos y aplicar costos de proveedor verificados.
@@ -161,6 +162,7 @@ function show(x){out.textContent=typeof x==='string'?x:JSON.stringify(x,null,2)}
 async function call(url,opt){try{let r=await fetch(url,opt);let t=await r.text();try{show(JSON.parse(t))}catch{show(t)}}catch(e){show('Error de conexión: '+e)}}
 function oauth(){location.href='/oauth/mercadolibre/start'}
 function status(){call('/api/status')}
+function verifyML(){call('/api/mercadolibre/verify')}
 function plan(){call('/api/plan')}
 function autonomous(){show('Tygo está ejecutando exploración autónoma...');call('/api/autonomy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({query:'productos'})})}
 function send(){let c=document.getElementById('cmd').value.trim();if(!c)return show('Escribe una orden.');show('Brillo + Tygo están procesando la orden...');call('/api/brillo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({command:c})})}
@@ -212,7 +214,7 @@ def mercadolibre_verify():
 def status():
     return {
         "service": "AutoBrillo AI",
-        "version": "v7.3",
+        "version": "v7.4",
         "brain_ready": agent.brain.ready,
         "products": len(agent.catalog.products),
         "active_goals": len(goals.list_active()),
