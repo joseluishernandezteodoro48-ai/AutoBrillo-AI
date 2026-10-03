@@ -12,7 +12,7 @@ from connectors.mercadolibre_api import MercadoLibreAPI
 from goal_agent import GoalAgent
 from security import RateLimiter, constant_time_equal, redact
 
-app = FastAPI(title="AutoBrillo AI API", version="7.3")
+app = FastAPI(title="AutoBrillo AI API", version="7.4")
 oauth = MercadoLibreOAuth()
 ml_api = MercadoLibreAPI(oauth)
 agent = SalesAgent()
@@ -137,7 +137,7 @@ button{width:100%;padding:16px;border:0;border-radius:12px;background:#263454;co
 textarea{width:100%;box-sizing:border-box;min-height:90px;background:#0d1426;color:white;border:1px solid #34415f;border-radius:12px;padding:12px;font-size:16px}
 pre{white-space:pre-wrap;word-break:break-word;background:#0b1222;padding:14px;border-radius:12px}
 </style></head><body><main>
-<h1>✨ Brillo</h1><small>AutoBrillo AI · Brillo + Tygo · v7.3</small>
+<h1>✨ Brillo</h1><small>AutoBrillo AI · Brillo + Tygo · v7.4</small>
 <div class="card"><h2>¿Qué hacemos?</h2>
 <textarea id="cmd" placeholder="Ejemplo: busca 8 auriculares"></textarea>
 <button onclick="send()">🚀 Ejecutar orden</button></div>
@@ -176,6 +176,7 @@ def health():
         "brain_ready": agent.brain.ready,
         "brillo_ready": True,
         "mercadolibre_configured": oauth.configured(),
+        "mercadolibre_connected": bool(oauth.access_token()) if oauth.configured() else False,
         **persistence_status(),
     }
 
